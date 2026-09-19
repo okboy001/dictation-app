@@ -22,7 +22,7 @@ type DictationItem = { id: string; text: string };
 type ListKey = 'zhDictation' | 'zhPractice' | 'enDictation' | 'enPractice';
 type TabKey = 'dictation' | 'practice';
 type ContentLang = 'zh' | 'en';
-type Lang = 'yue' | 'pu' | 'en';
+type Lang = 'yue' | 'pu' | 'en' | 'enGB';
 type Editing = { list: ListKey; id: string; value: string } | null;
 type StoredVoice = { name: string; lang: string };
 
@@ -373,6 +373,7 @@ function normalizeLang(value: string): string {
 function localeFor(lang: Lang): string {
   if (lang === 'yue') return 'zh-HK';
   if (lang === 'en') return 'en-US';
+  if (lang === 'enGB') return 'en-GB';
   return 'zh-CN';
 }
 
@@ -383,6 +384,13 @@ function voiceScoreFor(voice: SpeechSynthesisVoice, lang: Lang): number {
     if (n === 'zh-hk' || n.startsWith('yue')) return 3;
     if (/sinji|cantonese|粵|粤/.test(name)) return 2;
     if (n === 'zh') return 1;
+    return 0;
+  }
+  if (lang === 'enGB') {
+    if (n === 'en-gb') return 3;
+    if (n === 'en-us' || n === 'en-au') return 2;
+    if (/daniel|serena|kate|oliver|arthur/.test(name)) return 2;
+    if (n === 'en') return 1;
     return 0;
   }
   if (lang === 'en') {
@@ -412,13 +420,14 @@ function pickVoice(lang: Lang, list: SpeechSynthesisVoice[]): SpeechSynthesisVoi
   return best;
 }
 
-function speakableText(text: string, mode: ContentLang): string {
-  if (mode === 'en') {
+function speakableText(text: string, variant: 'zh' | 'us' | 'gb'): string {
+  if (variant === 'us' || variant === 'gb') {
+    const periodName = variant === 'gb' ? 'full stop' : 'period';
     return text
       .replace(/(\d)\.(\d)/g, '$1\u0000$2')
       .replace(/…|\.\.\./g, 'ellipsis')
       .replace(/，|,/g, 'comma')
-      .replace(/。|\./g, 'period')
+      .replace(/。|\./g, periodName)
       .replace(/！|!/g, 'exclamation mark')
       .replace(/？|\?/g, 'question mark')
       .replace(/、/g, 'comma')
@@ -463,6 +472,7 @@ export default function App() {
     return stored === 'yue' ? 'yue' : 'pu';
   });
   const [contentLang, setContentLang] = useState<ContentLang>(() => (localStorage.getItem('dictation_content_lang_v1') === 'en' ? 'en' : 'zh'));
+  const [enVariant, setEnVariant] = useState<'us' | 'gb'>(() => (localStorage.getItem('dictation_en_variant_v1') === 'us' ? 'us' : 'gb'));
   const [speed, setSpeed] = useState<number>(() => {
     const stored = parseFloat(localStorage.getItem('dictation_speed_v1') || '');
     return SPEED_OPTIONS.some(option => option.value === stored) ? stored : 0.4;
@@ -471,6 +481,7 @@ export default function App() {
     yue: loadVoiceChoice('dictation_voice_yue_v1'),
     pu: loadVoiceChoice('dictation_voice_pu_v1'),
     en: loadVoiceChoice('dictation_voice_en_v1'),
+    enGB: loadVoiceChoice('dictation_voice_en_gb_v1'),
   }));
 
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
@@ -510,12 +521,14 @@ export default function App() {
   useEffect(() => { localStorage.setItem('dictation_en_practice_v1', JSON.stringify(enPracticeItems)); }, [enPracticeItems]);
   useEffect(() => { localStorage.setItem('dictation_lang_v2', lang); }, [lang]);
   useEffect(() => { localStorage.setItem('dictation_content_lang_v1', contentLang); }, [contentLang]);
+  useEffect(() => { localStorage.setItem('dictation_en_variant_v1', enVariant); }, [enVariant]);
   useEffect(() => { localStorage.setItem('dictation_speed_v1', String(speed)); }, [speed]);
   useEffect(() => { localStorage.setItem('dictation_practice_times_v1', String(times)); }, [times]);
   useEffect(() => {
     localStorage.setItem('dictation_voice_yue_v1', JSON.stringify(voiceChoice.yue));
     localStorage.setItem('dictation_voice_pu_v1', JSON.stringify(voiceChoice.pu));
     localStorage.setItem('dictation_voice_en_v1', JSON.stringify(voiceChoice.en));
+    localStorage.setItem('dictation_voice_en_gb_v1', JSON.stringify(voiceChoice.enGB));
   }, [voiceChoice]);
 
   useEffect(() => {
@@ -538,7 +551,7 @@ export default function App() {
     return () => clearTimeout(id);
   }, [notice]);
 
-  const speakLang: Lang = contentLang === 'en' ? 'en' : lang;
+  const speakLang: Lang = contentLang === 'en' ? (enVariant === 'gb' ? 'enGB' : 'en') : lang;
 
   const voiceOptions = useMemo(() => {
     const seen = new Set<string>();
@@ -693,14 +706,14 @@ export default function App() {
     }
     if (!voice) voice = pickVoice(speakLang, list);
 
-    const utterance = new SpeechSynthesisUtterance(speakableText(text, contentLang === 'en' ? 'en' : 'zh'));
+    const utterance = new SpeechSynthesisUtterance(speakableText(text, contentLang === 'en' ? enVariant : 'zh'));
     utterance.lang = voice?.lang || localeFor(speakLang);
     if (voice) {
       utterance.voice = voice;
     } else {
       setNotice(speakLang === 'pu'
         ? '未偵測到普通話語音，請喺「聲線」揀選或安裝普通話語音'
-        : speakLang === 'en'
+        : speakLang === 'en' || speakLang === 'enGB'
           ? '未偵測到英文語音，請喺「聲線」揀選或安裝英文語音'
           : '未偵測到粵語語音，請喺「聲線」揀選或安裝粵語語音');
     }
@@ -1000,7 +1013,18 @@ export default function App() {
             {isEnglish ? 'English' : '中文'}
           </button>
 
-          {!isEnglish && (
+          {isEnglish ? (
+            <button
+              onClick={() => setEnVariant(prev => (prev === 'gb' ? 'us' : 'gb'))}
+              className={`flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-bold shadow-sm transition-all active:scale-95 ${
+                enVariant === 'gb' ? 'border-emerald-200 bg-emerald-50 text-emerald-600' : 'border-rose-200 bg-rose-50 text-rose-600'
+              }`}
+              title="切換美式／英式"
+            >
+              <Languages className="h-4 w-4" />
+              {enVariant === 'gb' ? '英式' : '美式'}
+            </button>
+          ) : (
             <button
               onClick={toggleLang}
               className={`flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-bold shadow-sm transition-all active:scale-95 ${
