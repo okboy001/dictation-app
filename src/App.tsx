@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Volume2, Trash2, Pencil, ChevronUp, ChevronDown, Plus, Gauge, Languages, BookOpen, Check, X } from 'lucide-react';
 
 const MAX_CHUNK = 8;
@@ -7,6 +7,7 @@ const SPEEDS = [0.6, 0.85, 1.0];
 type DictationItem = { id: string; text: string };
 type Lang = 'yue' | 'pu';
 type Editing = { id: string; value: string } | null;
+type StoredVoice = { name: string; lang: string };
 
 const PARTICLES = new Set([
   '的', '了', '著', '着', '嗎', '吗', '呢', '吧', '啊', '呀',
@@ -21,6 +22,8 @@ const PUNCT_CHARS = new Set(
   '。！？!?…；;：:，,、.．「」『』（）()《》〈〉【】[]{}“”‘’"\'—－–~～·•/\\｜|'.split(''),
 );
 
+const SPLIT_PUNCT = new Set('。！？!?…；;：:，,、.．'.split(''));
+
 function isPunct(char: string): boolean {
   return PUNCT_CHARS.has(char);
 }
@@ -29,10 +32,14 @@ function isSpace(char: string): boolean {
   return /\s/.test(char);
 }
 
+function isCounted(char: string): boolean {
+  return !isPunct(char) && !isSpace(char);
+}
+
 function countChars(text: string): number {
   let count = 0;
   for (const char of Array.from(text)) {
-    if (!isPunct(char) && !isSpace(char)) count += 1;
+    if (isCounted(char)) count += 1;
   }
   return count;
 }
@@ -47,7 +54,7 @@ function hardSplit(text: string, size: number): string[] {
   let current = '';
   let count = 0;
   for (const char of Array.from(text)) {
-    if (!isPunct(char) && !isSpace(char)) {
+    if (isCounted(char)) {
       if (count >= size) {
         out.push(current);
         current = '';
@@ -98,11 +105,88 @@ function polishGroups(groups: string[][]): string[][] {
   return g;
 }
 
-function splitEntry(entry: string): string[] {
-  if (countChars(entry) <= MAX_CHUNK) return [entry];
+function splitByPunctuation(text: string): string[] {
+  const chunks: string[] = [];
+  let current = '';
+  for (const char of Array.from(text)) {
+    if (SPLIT_PUNCT.has(char)) {
+      if (countChars(current) > 0) {
+        current += char;
+        chunks.push(current);
+        current = '';
+      } else if (chunks.length > 0) {
+        chunks[chunks.length - 1] += char;
+      } else {
+        current += char;
+      }
+    } else {
+      current += char;
+    }
+  }
+  if (current) chunks.push(current);
+  return chunks;
+}
 
-  const segments = segmentWords(entry);
-  if (segments.length === 0) return hardSplit(entry, MAX_CHUNK);
+function packBalanced(words: string[]): string[][] {
+  const counts = words.map(countChars);
+
+  const split = (start: number, end: number): string[][] => {
+    const segTotal = counts.slice(start, end).reduce((a, b) => a + b, 0);
+    if (segTotal <= MAX_CHUNK) return [words.slice(start, end)];
+
+    let best = -1;
+    let bestScore = Infinity;
+    let leftSum = 0;
+    for (let b = start; b < end; b++) {
+      leftSum += counts[b];
+      const rightSum = segTotal - leftSum;
+      if (leftSum <= MAX_CHUNK && rightSum <= MAX_CHUNK) {
+        const score = Math.abs(leftSum - rightSum);
+        if (score < bestScore) {
+          bestScore = score;
+          best = b + 1;
+        }
+      }
+    }
+
+    if (best === -1) {
+      const out: string[][] = [];
+      let current: string[] = [];
+      let currentCount = 0;
+      for (let i = start; i < end; i++) {
+        if (current.length > 0 && currentCount + counts[i] > MAX_CHUNK) {
+          out.push(current);
+          current = [];
+          currentCount = 0;
+        }
+        current.push(words[i]);
+        currentCount += counts[i];
+      }
+      if (current.length > 0) out.push(current);
+      return out;
+    }
+
+    return [...split(start, best), ...split(best, end)];
+  };
+
+  return split(0, words.length);
+}
+
+function splitByWords(clause: string): string[] {
+  const chars = Array.from(clause);
+  let tail = '';
+  while (chars.length > 0 && isPunct(chars[chars.length - 1])) {
+    tail = chars.pop()! + tail;
+  }
+  const core = chars.join('');
+  if (countChars(core) <= MAX_CHUNK) return [core + tail];
+
+  const segments = segmentWords(core);
+  if (segments.length === 0) {
+    const hard = hardSplit(core, MAX_CHUNK);
+    if (tail) hard[hard.length - 1] += tail;
+    return hard;
+  }
 
   const words: string[] = [];
   for (const word of segments) {
@@ -110,27 +194,27 @@ function splitEntry(entry: string): string[] {
     else words.push(word);
   }
 
-  const groups: string[][] = [];
-  let current: string[] = [];
-  for (const word of words) {
-    const currentCount = countChars(current.join(''));
-    const wordCount = countChars(word);
-    if (current.length > 0 && wordCount > 0 && currentCount + wordCount > MAX_CHUNK) {
-      groups.push(current);
-      current = [word];
-    } else {
-      current.push(word);
-    }
-  }
-  if (current.length > 0) groups.push(current);
+  const groups = polishGroups(packBalanced(words));
+  const chunks = groups.map(parts => parts.join(''));
+  if (tail) chunks[chunks.length - 1] += tail;
+  return chunks;
+}
 
-  return polishGroups(groups).map(parts => parts.join(''));
+function splitEntry(entry: string): string[] {
+  if (countChars(entry) <= MAX_CHUNK) return [entry];
+
+  const out: string[] = [];
+  for (const clause of splitByPunctuation(entry)) {
+    if (countChars(clause) <= MAX_CHUNK) out.push(clause);
+    else out.push(...splitByWords(clause));
+  }
+  return out;
 }
 
 function parseToItems(raw: string): string[] {
   const out: string[] = [];
-  for (const line of raw.split(/\r?\n/)) {
-    const entry = line.trim();
+  for (const token of raw.split(/\s+/)) {
+    const entry = token.trim();
     if (!entry || countChars(entry) === 0) continue;
     out.push(...splitEntry(entry));
   }
@@ -151,30 +235,59 @@ function loadItems(key: string): DictationItem[] | null {
   }
 }
 
+function loadVoiceChoice(key: string): StoredVoice | null {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed.name === 'string' && typeof parsed.lang === 'string' && parsed.name && parsed.lang) {
+      return { name: parsed.name, lang: parsed.lang };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 function normalizeLang(value: string): string {
   return value.replace(/_/g, '-').toLowerCase();
 }
 
-function pickVoice(lang: Lang, list: SpeechSynthesisVoice[]): SpeechSynthesisVoice | null {
-  const nameOf = (voice: SpeechSynthesisVoice) => voice.name.toLowerCase();
+function isChineseFamily(lang: string): boolean {
+  const n = normalizeLang(lang);
+  return n.startsWith('zh') || n.startsWith('cmn') || n.startsWith('yue');
+}
 
+function localeFor(lang: Lang): string {
+  return lang === 'yue' ? 'zh-HK' : 'zh-CN';
+}
+
+function voiceScoreFor(voice: SpeechSynthesisVoice, lang: Lang): number {
+  const n = normalizeLang(voice.lang);
+  const name = voice.name.toLowerCase();
   if (lang === 'yue') {
-    return (
-      list.find(v => normalizeLang(v.lang) === 'zh-hk') ||
-      list.find(v => normalizeLang(v.lang).startsWith('yue')) ||
-      list.find(v => /sinji|cantonese|粵|粤/.test(nameOf(v))) ||
-      null
-    );
+    if (n === 'zh-hk' || n.startsWith('yue')) return 3;
+    if (/sinji|cantonese|粵|粤/.test(name)) return 2;
+    if (n === 'zh') return 1;
+    return 0;
   }
+  if (n === 'zh-cn' || n.startsWith('zh-hans') || n.startsWith('cmn')) return 3;
+  if (/ting-ting|tingting|mandarin|普通话|普通話|huihui|yaoyao/.test(name)) return 2;
+  if (n === 'zh') return 1;
+  return 0;
+}
 
-  return (
-    list.find(v => normalizeLang(v.lang) === 'zh-cn') ||
-    list.find(v => normalizeLang(v.lang).startsWith('zh-hans')) ||
-    list.find(v => normalizeLang(v.lang).startsWith('cmn')) ||
-    list.find(v => /ting-ting|tingting|mandarin|普通话|普通話|huihui|yaoyao/.test(nameOf(v))) ||
-    list.find(v => normalizeLang(v.lang) === 'zh') ||
-    null
-  );
+function pickVoice(lang: Lang, list: SpeechSynthesisVoice[]): SpeechSynthesisVoice | null {
+  let best: SpeechSynthesisVoice | null = null;
+  let bestScore = 0;
+  for (const voice of list) {
+    const score = voiceScoreFor(voice, lang);
+    if (score > bestScore) {
+      bestScore = score;
+      best = voice;
+    }
+  }
+  return best;
 }
 
 export default function App() {
@@ -191,6 +304,10 @@ export default function App() {
     const stored = parseFloat(localStorage.getItem('dictation_speed_v1') || '');
     return Number.isNaN(stored) ? 0.85 : stored;
   });
+  const [voiceChoice, setVoiceChoice] = useState<Record<Lang, StoredVoice | null>>(() => ({
+    yue: loadVoiceChoice('dictation_voice_yue_v1'),
+    pu: loadVoiceChoice('dictation_voice_pu_v1'),
+  }));
 
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
   const [ttsSupported, setTtsSupported] = useState(true);
@@ -202,6 +319,10 @@ export default function App() {
   useEffect(() => { localStorage.setItem('dictation_items_v1', JSON.stringify(items)); }, [items]);
   useEffect(() => { localStorage.setItem('dictation_lang_v1', lang); }, [lang]);
   useEffect(() => { localStorage.setItem('dictation_speed_v1', String(speed)); }, [speed]);
+  useEffect(() => {
+    localStorage.setItem('dictation_voice_yue_v1', JSON.stringify(voiceChoice.yue));
+    localStorage.setItem('dictation_voice_pu_v1', JSON.stringify(voiceChoice.pu));
+  }, [voiceChoice]);
 
   useEffect(() => {
     if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
@@ -223,6 +344,20 @@ export default function App() {
     return () => clearTimeout(id);
   }, [notice]);
 
+  const chineseVoices = useMemo(() => {
+    const seen = new Set<string>();
+    const unique = voices.filter(voice => {
+      if (!isChineseFamily(voice.lang)) return false;
+      const key = `${voice.name}|${voice.lang}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    return [...unique].sort(
+      (a, b) => voiceScoreFor(b, lang) - voiceScoreFor(a, lang) || a.name.localeCompare(b.name),
+    );
+  }, [voices, lang]);
+
   const speak = useCallback((id: string, text: string) => {
     if (!('speechSynthesis' in window)) {
       setTtsSupported(false);
@@ -231,17 +366,24 @@ export default function App() {
     }
     window.speechSynthesis.cancel();
 
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = lang === 'yue' ? 'zh-HK' : 'zh-CN';
-
     const available = window.speechSynthesis.getVoices();
-    const voice = pickVoice(lang, available.length > 0 ? available : voices);
+    const list = available.length > 0 ? available : voices;
+
+    const chosen = voiceChoice[lang];
+    let voice: SpeechSynthesisVoice | null = null;
+    if (chosen) {
+      voice = list.find(v => v.name === chosen.name && v.lang === chosen.lang) ?? null;
+    }
+    if (!voice) voice = pickVoice(lang, list);
+
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = voice?.lang || localeFor(lang);
     if (voice) {
       utterance.voice = voice;
     } else {
       setNotice(lang === 'pu'
-        ? '未偵測到普通話語音，請安裝普通話語音（例如 Ting-Ting）'
-        : '未偵測到粵語語音，會用系統預設語音');
+        ? '未偵測到普通話語音，請喺「聲線」揀選或安裝普通話語音'
+        : '未偵測到粵語語音，請喺「聲線」揀選或安裝粵語語音');
     }
 
     utterance.rate = speed;
@@ -250,7 +392,7 @@ export default function App() {
 
     setSpeakingId(id);
     window.speechSynthesis.speak(utterance);
-  }, [lang, speed, voices]);
+  }, [lang, speed, voices, voiceChoice]);
 
   const addItems = (raw: string) => {
     const texts = parseToItems(raw);
@@ -309,9 +451,11 @@ export default function App() {
       return SPEEDS[(index + 1) % SPEEDS.length];
     });
 
+  const currentChoice = voiceChoice[lang];
+
   return (
     <div className="flex min-h-[100dvh] flex-col bg-gradient-to-br from-slate-50 to-blue-50 font-sans text-slate-800">
-      <header className="mx-auto flex w-full max-w-3xl flex-none items-center justify-between gap-3 p-4 md:px-6">
+      <header className="mx-auto flex w-full max-w-3xl flex-none flex-wrap items-center justify-between gap-2 p-4 md:px-6">
         <div className="flex min-w-0 items-center gap-2">
           <div className="flex h-10 w-10 flex-none items-center justify-center rounded-2xl bg-blue-500 text-white shadow-sm">
             <BookOpen className="h-5 w-5" />
@@ -322,7 +466,7 @@ export default function App() {
           </div>
         </div>
 
-        <div className="flex flex-none items-center gap-2">
+        <div className="flex flex-wrap items-center justify-end gap-2">
           <button
             onClick={toggleLang}
             className={`flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-bold shadow-sm transition-all active:scale-95 ${
@@ -344,6 +488,28 @@ export default function App() {
             <Gauge className="h-4 w-4" />
             {speed}x
           </button>
+
+          <select
+            value={currentChoice ? `${currentChoice.name}|${currentChoice.lang}` : ''}
+            onChange={event => {
+              const value = event.target.value;
+              let next: StoredVoice | null = null;
+              if (value) {
+                const separator = value.lastIndexOf('|');
+                next = { name: value.slice(0, separator), lang: value.slice(separator + 1) };
+              }
+              setVoiceChoice(prev => ({ ...prev, [lang]: next }));
+            }}
+            title="朗讀聲線"
+            className="max-w-[9.5rem] cursor-pointer rounded-xl border border-slate-200 bg-white px-2 py-2 text-xs font-bold text-slate-600 shadow-sm transition-all focus:border-blue-400 focus:outline-none"
+          >
+            <option value="">聲線：自動</option>
+            {chineseVoices.map(voice => (
+              <option key={`${voice.name}|${voice.lang}`} value={`${voice.name}|${voice.lang}`}>
+                {voice.name} ({voice.lang})
+              </option>
+            ))}
+          </select>
         </div>
       </header>
 
@@ -378,7 +544,7 @@ export default function App() {
                 }
               }}
               rows={3}
-              placeholder="每行一個詞語或句子；標點會保留，超過 8 個字會自動拆分。"
+              placeholder="輸入詞語或課文；用 Space 或換行分隔。標點會保留，長句會跟意思自動拆段。"
               className="w-full resize-none rounded-xl border-2 border-slate-200 bg-slate-50 px-3 py-2 font-medium text-slate-700 transition-all focus:border-blue-400 focus:bg-white focus:outline-none"
             />
             <button
