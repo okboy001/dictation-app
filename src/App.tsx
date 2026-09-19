@@ -1190,13 +1190,34 @@ export default function App() {
               </div>
               <div className="flex flex-wrap gap-x-8 gap-y-10">
                 {practiceInfo.items.map(item => {
+                  if (isEnglish) {
+                    const letters = Math.max(Array.from(item.text).length, 1);
+                    const lineWidthCm = Math.min(Math.max(letters * 0.9, 4), 16);
+                    return (
+                      <div key={item.id} className="flex items-start gap-3 break-inside-avoid">
+                        <div className="whitespace-nowrap pt-[0.15cm] text-[0.9cm] font-bold leading-none tracking-[0.05cm] text-slate-400">
+                          {item.text}
+                        </div>
+                        <div className="flex flex-col gap-[0.7cm]">
+                          {Array.from({ length: times }).map((_, i) => (
+                            <div
+                              key={i}
+                              className="border-b-[0.05cm] border-slate-500"
+                              style={{ width: `${lineWidthCm}cm`, height: '0.9cm' }}
+                            />
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  }
+
                   const chars = Array.from(item.text);
                   const charCount = Math.max(chars.length, 1);
                   const perRow = charCount === 1 ? times : Math.min(charCount, 13);
                   const total = charCount * times;
                   return (
                     <div key={item.id} className="flex items-center gap-3 break-inside-avoid">
-                      <div className={`font-bold leading-none text-slate-400 ${isEnglish ? 'text-[0.7cm] tracking-[0.05cm]' : 'text-[0.9cm] tracking-[0.1cm]'} whitespace-nowrap`}>
+                      <div className="whitespace-nowrap text-[0.9cm] font-bold leading-none tracking-[0.1cm] text-slate-400">
                         {item.text}
                       </div>
                       <div
