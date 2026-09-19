@@ -18,10 +18,19 @@ const SPEED_OPTIONS = [
 ] as const;
 
 type DictationItem = { id: string; text: string };
-type ListKey = 'dictation' | 'practice';
-type Lang = 'yue' | 'pu';
+type ListKey = 'zhDictation' | 'zhPractice' | 'enDictation' | 'enPractice';
+type TabKey = 'dictation' | 'practice';
+type ContentLang = 'zh' | 'en';
+type Lang = 'yue' | 'pu' | 'en';
 type Editing = { list: ListKey; id: string; value: string } | null;
 type StoredVoice = { name: string; lang: string };
+
+const LIST_LABELS: Record<ListKey, string> = {
+  zhDictation: '默書內容',
+  zhPractice: '練習字',
+  enDictation: '英文默書',
+  enPractice: '英文練習字',
+};
 
 const PARTICLES = new Set([
   '的', '了', '著', '着', '嗎', '吗', '呢', '吧', '啊', '呀',
@@ -239,6 +248,16 @@ function parsePracticeItems(raw: string): string[] {
   return raw.split(/\s+/).map(token => token.trim()).filter(Boolean);
 }
 
+function parseEnglishItems(raw: string): string[] {
+  const out: string[] = [];
+  for (const token of raw.split(/\s+/)) {
+    const entry = token.trim();
+    if (!entry) continue;
+    out.push(...splitByPunctuation(entry));
+  }
+  return out;
+}
+
 function loadItems(key: string): DictationItem[] | null {
   try {
     const raw = localStorage.getItem(key);
@@ -272,7 +291,9 @@ function normalizeLang(value: string): string {
 }
 
 function localeFor(lang: Lang): string {
-  return lang === 'yue' ? 'zh-HK' : 'zh-CN';
+  if (lang === 'yue') return 'zh-HK';
+  if (lang === 'en') return 'en-US';
+  return 'zh-CN';
 }
 
 function voiceScoreFor(voice: SpeechSynthesisVoice, lang: Lang): number {
@@ -282,6 +303,13 @@ function voiceScoreFor(voice: SpeechSynthesisVoice, lang: Lang): number {
     if (n === 'zh-hk' || n.startsWith('yue')) return 3;
     if (/sinji|cantonese|粵|粤/.test(name)) return 2;
     if (n === 'zh') return 1;
+    return 0;
+  }
+  if (lang === 'en') {
+    if (n === 'en-us') return 3;
+    if (n === 'en-gb' || n === 'en-au') return 2;
+    if (/samantha|alex|daniel|karen|moira|tessa|fiona|serena/.test(name)) return 2;
+    if (n === 'en') return 1;
     return 0;
   }
   if (n === 'zh-cn' || n.startsWith('zh-hans') || n.startsWith('cmn')) return 3;
@@ -304,7 +332,21 @@ function pickVoice(lang: Lang, list: SpeechSynthesisVoice[]): SpeechSynthesisVoi
   return best;
 }
 
-function speakableText(text: string): string {
+function speakableText(text: string, mode: ContentLang): string {
+  if (mode === 'en') {
+    return text
+      .replace(/(\d)\.(\d)/g, '$1\u0000$2')
+      .replace(/…|\.\.\./g, 'ellipsis')
+      .replace(/，|,/g, 'comma')
+      .replace(/。|\./g, 'period')
+      .replace(/！|!/g, 'exclamation mark')
+      .replace(/？|\?/g, 'question mark')
+      .replace(/、/g, 'comma')
+      .replace(/；|;/g, 'semicolon')
+      .replace(/：|:/g, 'colon')
+      .replace(/「|『|」|』/g, 'quote')
+      .replace(/\u0000/g, '.');
+  }
   return text
     .replace(/(\d)\.(\d)/g, '$1點$2')
     .replace(/…|\.\.\./g, '省略號')
@@ -319,6 +361,11 @@ function speakableText(text: string): string {
     .replace(/」|』/g, '引號');
 }
 
+function listKeyFor(contentLang: ContentLang, tab: TabKey): ListKey {
+  if (contentLang === 'en') return tab === 'dictation' ? 'enDictation' : 'enPractice';
+  return tab === 'dictation' ? 'zhDictation' : 'zhPractice';
+}
+
 export default function App() {
   const [items, setItems] = useState<DictationItem[]>(() => {
     const existing = loadItems('dictation_items_v1');
@@ -329,10 +376,13 @@ export default function App() {
     ];
   });
   const [practiceItems, setPracticeItems] = useState<DictationItem[]>(() => loadItems('dictation_practice_v1') ?? []);
+  const [enItems, setEnItems] = useState<DictationItem[]>(() => loadItems('dictation_en_items_v1') ?? []);
+  const [enPracticeItems, setEnPracticeItems] = useState<DictationItem[]>(() => loadItems('dictation_en_practice_v1') ?? []);
   const [lang, setLang] = useState<Lang>(() => {
     const stored = localStorage.getItem('dictation_lang_v2');
     return stored === 'yue' ? 'yue' : 'pu';
   });
+  const [contentLang, setContentLang] = useState<ContentLang>(() => (localStorage.getItem('dictation_content_lang_v1') === 'en' ? 'en' : 'zh'));
   const [speed, setSpeed] = useState<number>(() => {
     const stored = parseFloat(localStorage.getItem('dictation_speed_v1') || '');
     return SPEED_OPTIONS.some(option => option.value === stored) ? stored : 0.4;
@@ -340,6 +390,7 @@ export default function App() {
   const [voiceChoice, setVoiceChoice] = useState<Record<Lang, StoredVoice | null>>(() => ({
     yue: loadVoiceChoice('dictation_voice_yue_v1'),
     pu: loadVoiceChoice('dictation_voice_pu_v1'),
+    en: loadVoiceChoice('dictation_voice_en_v1'),
   }));
 
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
@@ -348,9 +399,11 @@ export default function App() {
   const [editing, setEditing] = useState<Editing>(null);
   const [draft, setDraft] = useState('');
   const [practiceDraft, setPracticeDraft] = useState('');
+  const [enDraft, setEnDraft] = useState('');
+  const [enPracticeDraft, setEnPracticeDraft] = useState('');
   const [notice, setNotice] = useState<string | null>(null);
 
-  const [activeTab, setActiveTab] = useState<ListKey>('dictation');
+  const [activeTab, setActiveTab] = useState<TabKey>('dictation');
   const [showExport, setShowExport] = useState(false);
   const [times, setTimes] = useState<number>(() => {
     const stored = parseInt(localStorage.getItem('dictation_practice_times_v1') || '', 10);
@@ -362,19 +415,27 @@ export default function App() {
 
   const itemsRef = useRef(items);
   const practiceRef = useRef(practiceItems);
+  const enItemsRef = useRef(enItems);
+  const enPracticeRef = useRef(enPracticeItems);
   const skipSaveRef = useRef(true);
 
   useEffect(() => { itemsRef.current = items; }, [items]);
   useEffect(() => { practiceRef.current = practiceItems; }, [practiceItems]);
+  useEffect(() => { enItemsRef.current = enItems; }, [enItems]);
+  useEffect(() => { enPracticeRef.current = enPracticeItems; }, [enPracticeItems]);
 
   useEffect(() => { localStorage.setItem('dictation_items_v1', JSON.stringify(items)); }, [items]);
   useEffect(() => { localStorage.setItem('dictation_practice_v1', JSON.stringify(practiceItems)); }, [practiceItems]);
+  useEffect(() => { localStorage.setItem('dictation_en_items_v1', JSON.stringify(enItems)); }, [enItems]);
+  useEffect(() => { localStorage.setItem('dictation_en_practice_v1', JSON.stringify(enPracticeItems)); }, [enPracticeItems]);
   useEffect(() => { localStorage.setItem('dictation_lang_v2', lang); }, [lang]);
+  useEffect(() => { localStorage.setItem('dictation_content_lang_v1', contentLang); }, [contentLang]);
   useEffect(() => { localStorage.setItem('dictation_speed_v1', String(speed)); }, [speed]);
   useEffect(() => { localStorage.setItem('dictation_practice_times_v1', String(times)); }, [times]);
   useEffect(() => {
     localStorage.setItem('dictation_voice_yue_v1', JSON.stringify(voiceChoice.yue));
     localStorage.setItem('dictation_voice_pu_v1', JSON.stringify(voiceChoice.pu));
+    localStorage.setItem('dictation_voice_en_v1', JSON.stringify(voiceChoice.en));
   }, [voiceChoice]);
 
   useEffect(() => {
@@ -397,6 +458,8 @@ export default function App() {
     return () => clearTimeout(id);
   }, [notice]);
 
+  const speakLang: Lang = contentLang === 'en' ? 'en' : lang;
+
   const voiceOptions = useMemo(() => {
     const seen = new Set<string>();
     const unique = voices.filter(voice => {
@@ -406,11 +469,16 @@ export default function App() {
       return true;
     });
     return [...unique].sort(
-      (a, b) => voiceScoreFor(b, lang) - voiceScoreFor(a, lang) || a.name.localeCompare(b.name),
+      (a, b) => voiceScoreFor(b, speakLang) - voiceScoreFor(a, speakLang) || a.name.localeCompare(b.name),
     );
-  }, [voices, lang]);
+  }, [voices, speakLang]);
 
-  const saveToCloud = useCallback(async (dictation: DictationItem[], practice: DictationItem[]) => {
+  const saveToCloud = useCallback(async (
+    dictation: DictationItem[],
+    practice: DictationItem[],
+    enDictation: DictationItem[],
+    enPractice: DictationItem[],
+  ) => {
     if (!CLOUD_SCRIPT_URL) return;
     setCloudStatus('saving');
     try {
@@ -420,6 +488,8 @@ export default function App() {
         body: JSON.stringify({
           items: dictation.map(item => item.text),
           practice: practice.map(item => item.text),
+          enItems: enDictation.map(item => item.text),
+          enPractice: enPractice.map(item => item.text),
         }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -444,37 +514,56 @@ export default function App() {
       const toItems = (list: string[]) => list.map((text: string) => ({ id: makeId(), text }));
       const cloudItems = toItems(data.items);
       const cloudPractice = toItems(Array.isArray(data.practice) ? data.practice : []);
+      const cloudEnItems = toItems(Array.isArray(data.enItems) ? data.enItems : []);
+      const cloudEnPractice = toItems(Array.isArray(data.enPractice) ? data.enPractice : []);
 
       let nextItems = cloudItems;
       let nextPractice = cloudPractice;
+      let nextEnItems = cloudEnItems;
+      let nextEnPractice = cloudEnPractice;
       let needSave = false;
 
-      if (localStorage.getItem('dictation_cloud_first_sync_v1') !== '1') {
-        if (cloudItems.length === 0 && itemsRef.current.length > 0) {
-          nextItems = itemsRef.current;
-          needSave = true;
-        } else if (itemsRef.current.length > 0) {
-          localStorage.setItem('dictation_items_backup_v1', JSON.stringify(itemsRef.current));
+      const firstSync = (
+        flag: string,
+        backupKey: string,
+        cloudList: DictationItem[],
+        localList: DictationItem[],
+        onMigrate: (local: DictationItem[]) => void,
+      ) => {
+        if (localStorage.getItem(flag) === '1') return;
+        if (cloudList.length === 0 && localList.length > 0) {
+          onMigrate(localList);
+        } else if (localList.length > 0) {
+          localStorage.setItem(backupKey, JSON.stringify(localList));
         }
-        localStorage.setItem('dictation_cloud_first_sync_v1', '1');
-      }
+        localStorage.setItem(flag, '1');
+      };
 
-      if (localStorage.getItem('dictation_cloud_first_sync_practice_v1') !== '1') {
-        if (cloudPractice.length === 0 && practiceRef.current.length > 0) {
-          nextPractice = practiceRef.current;
-          needSave = true;
-        } else if (practiceRef.current.length > 0) {
-          localStorage.setItem('dictation_practice_backup_v1', JSON.stringify(practiceRef.current));
-        }
-        localStorage.setItem('dictation_cloud_first_sync_practice_v1', '1');
-      }
+      firstSync('dictation_cloud_first_sync_v1', 'dictation_items_backup_v1', cloudItems, itemsRef.current, local => {
+        nextItems = local;
+        needSave = true;
+      });
+      firstSync('dictation_cloud_first_sync_practice_v1', 'dictation_practice_backup_v1', cloudPractice, practiceRef.current, local => {
+        nextPractice = local;
+        needSave = true;
+      });
+      firstSync('dictation_cloud_first_sync_en_v1', 'dictation_en_items_backup_v1', cloudEnItems, enItemsRef.current, local => {
+        nextEnItems = local;
+        needSave = true;
+      });
+      firstSync('dictation_cloud_first_sync_en_practice_v1', 'dictation_en_practice_backup_v1', cloudEnPractice, enPracticeRef.current, local => {
+        nextEnPractice = local;
+        needSave = true;
+      });
 
-      if (needSave) await saveToCloud(nextItems, nextPractice);
+      if (needSave) await saveToCloud(nextItems, nextPractice, nextEnItems, nextEnPractice);
 
       skipSaveRef.current = true;
       setEditing(null);
       setItems(nextItems);
       setPracticeItems(nextPractice);
+      setEnItems(nextEnItems);
+      setEnPracticeItems(nextEnPractice);
       setCloudStatus('synced');
     } catch {
       setCloudStatus('error');
@@ -488,9 +577,9 @@ export default function App() {
       skipSaveRef.current = false;
       return;
     }
-    const id = setTimeout(() => { saveToCloud(items, practiceItems); }, 800);
+    const id = setTimeout(() => { saveToCloud(items, practiceItems, enItems, enPracticeItems); }, 800);
     return () => clearTimeout(id);
-  }, [items, practiceItems, saveToCloud]);
+  }, [items, practiceItems, enItems, enPracticeItems, saveToCloud]);
 
   useEffect(() => {
     if (!CLOUD_SCRIPT_URL) return;
@@ -517,21 +606,23 @@ export default function App() {
     const available = window.speechSynthesis.getVoices();
     const list = available.length > 0 ? available : voices;
 
-    const chosen = voiceChoice[lang];
+    const chosen = voiceChoice[speakLang];
     let voice: SpeechSynthesisVoice | null = null;
     if (chosen) {
       voice = list.find(v => v.name === chosen.name && v.lang === chosen.lang) ?? null;
     }
-    if (!voice) voice = pickVoice(lang, list);
+    if (!voice) voice = pickVoice(speakLang, list);
 
-    const utterance = new SpeechSynthesisUtterance(speakableText(text));
-    utterance.lang = voice?.lang || localeFor(lang);
+    const utterance = new SpeechSynthesisUtterance(speakableText(text, contentLang === 'en' ? 'en' : 'zh'));
+    utterance.lang = voice?.lang || localeFor(speakLang);
     if (voice) {
       utterance.voice = voice;
     } else {
-      setNotice(lang === 'pu'
+      setNotice(speakLang === 'pu'
         ? '未偵測到普通話語音，請喺「聲線」揀選或安裝普通話語音'
-        : '未偵測到粵語語音，請喺「聲線」揀選或安裝粵語語音');
+        : speakLang === 'en'
+          ? '未偵測到英文語音，請喺「聲線」揀選或安裝英文語音'
+          : '未偵測到粵語語音，請喺「聲線」揀選或安裝粵語語音');
     }
 
     utterance.rate = speed;
@@ -540,27 +631,38 @@ export default function App() {
 
     setSpeakingId(id);
     window.speechSynthesis.speak(utterance);
-  }, [lang, speed, voices, voiceChoice]);
+  }, [speakLang, contentLang, speed, voices, voiceChoice]);
 
-  const addItems = (list: ListKey, raw: string) => {
-    const texts = list === 'dictation' ? parseToItems(raw) : parsePracticeItems(raw);
+  const getListInfo = (key: ListKey) => {
+    switch (key) {
+      case 'zhDictation': return { items, setList: setItems, setDraft, draft };
+      case 'zhPractice': return { items: practiceItems, setList: setPracticeItems, setDraft: setPracticeDraft, draft: practiceDraft };
+      case 'enDictation': return { items: enItems, setList: setEnItems, setDraft: setEnDraft, draft: enDraft };
+      case 'enPractice': return { items: enPracticeItems, setList: setEnPracticeItems, setDraft: setEnPracticeDraft, draft: enPracticeDraft };
+    }
+  };
+
+  const parseFor = (key: ListKey, raw: string): string[] => {
+    if (key === 'zhDictation') return parseToItems(raw);
+    if (key === 'zhPractice') return parsePracticeItems(raw);
+    return parseEnglishItems(raw);
+  };
+
+  const addItems = (key: ListKey, raw: string) => {
+    const texts = parseFor(key, raw);
     if (texts.length === 0) {
       setNotice('請先輸入內容');
       return;
     }
     const newItems = texts.map(text => ({ id: makeId(), text }));
-    if (list === 'dictation') {
-      setItems(prev => [...prev, ...newItems]);
-      setDraft('');
-    } else {
-      setPracticeItems(prev => [...prev, ...newItems]);
-      setPracticeDraft('');
-    }
+    const { setList, setDraft: clearDraft } = getListInfo(key);
+    setList(prev => [...prev, ...newItems]);
+    clearDraft('');
   };
 
-  const removeItem = (list: ListKey, id: string) => {
-    const setter = list === 'dictation' ? setItems : setPracticeItems;
-    setter(prev => prev.filter(item => item.id !== id));
+  const removeItem = (key: ListKey, id: string) => {
+    const { setList } = getListInfo(key);
+    setList(prev => prev.filter(item => item.id !== id));
     if (speakingId === id && 'speechSynthesis' in window) {
       window.speechSynthesis.cancel();
       setSpeakingId(null);
@@ -568,9 +670,9 @@ export default function App() {
     if (editing?.id === id) setEditing(null);
   };
 
-  const moveItem = (list: ListKey, index: number, direction: number) => {
-    const setter = list === 'dictation' ? setItems : setPracticeItems;
-    setter(prev => {
+  const moveItem = (key: ListKey, index: number, direction: number) => {
+    const { setList } = getListInfo(key);
+    setList(prev => {
       const target = index + direction;
       if (target < 0 || target >= prev.length) return prev;
       const next = [...prev];
@@ -586,26 +688,27 @@ export default function App() {
       setEditing(null);
       return;
     }
-    const setter = editing.list === 'dictation' ? setItems : setPracticeItems;
-    setter(prev => prev.map(item => (item.id === editing.id ? { ...item, text } : item)));
+    const { setList } = getListInfo(editing.list);
+    setList(prev => prev.map(item => (item.id === editing.id ? { ...item, text } : item)));
     setEditing(null);
   };
 
-  const clearAll = (list: ListKey) => {
-    const target = list === 'dictation' ? items : practiceItems;
+  const clearAll = (key: ListKey) => {
+    const { items: target } = getListInfo(key);
     if (target.length === 0) return;
-    const label = list === 'dictation' ? '默書內容' : '練習字';
+    const label = LIST_LABELS[key];
     if (!window.confirm(`確定清除全部 ${target.length} 段${label}？雲端內容都會被清除。此動作無法復原。`)) return;
     if ('speechSynthesis' in window) window.speechSynthesis.cancel();
     setSpeakingId(null);
     setEditing(null);
-    if (list === 'dictation') setItems([]);
-    else setPracticeItems([]);
+    const { setList } = getListInfo(key);
+    setList([]);
   };
 
   const toggleLang = () => setLang(prev => (prev === 'yue' ? 'pu' : 'yue'));
+  const toggleContentLang = () => setContentLang(prev => (prev === 'zh' ? 'en' : 'zh'));
 
-  const currentChoice = voiceChoice[lang];
+  const currentChoice = voiceChoice[speakLang];
 
   const cloudBadge = (
     <span
@@ -623,7 +726,7 @@ export default function App() {
   );
 
   const renderCard = (
-    list: ListKey,
+    listKey: ListKey,
     listItems: DictationItem[],
     draft: string,
     setDraft: (value: string) => void,
@@ -645,7 +748,7 @@ export default function App() {
           {cloudBadge}
           {extraHeader}
           <button
-            onClick={() => clearAll(list)}
+            onClick={() => clearAll(listKey)}
             disabled={listItems.length === 0}
             title={`清除所有${title}`}
             className="flex items-center gap-1 rounded-xl border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-bold text-rose-500 transition-all hover:bg-rose-100 active:scale-95 disabled:opacity-40"
@@ -662,7 +765,7 @@ export default function App() {
           onKeyDown={event => {
             if (event.key === 'Enter' && !event.shiftKey) {
               event.preventDefault();
-              addItems(list, draft);
+              addItems(listKey, draft);
             }
           }}
           rows={3}
@@ -670,7 +773,7 @@ export default function App() {
           className="w-full resize-none rounded-xl border-2 border-slate-200 bg-slate-50 px-3 py-2 font-medium text-slate-700 transition-all focus:border-blue-400 focus:bg-white focus:outline-none"
         />
         <button
-          onClick={() => addItems(list, draft)}
+          onClick={() => addItems(listKey, draft)}
           disabled={!draft.trim()}
           className="flex w-full items-center justify-center gap-2 rounded-xl bg-blue-500 py-2.5 font-bold tracking-widest text-white transition-all hover:bg-blue-600 active:scale-[0.98] disabled:opacity-40"
         >
@@ -683,7 +786,7 @@ export default function App() {
           <div className="py-8 text-center text-sm font-bold text-slate-300">{emptyText}</div>
         )}
         {listItems.map((item, index) => {
-          const isEditing = editing?.list === list && editing.id === item.id;
+          const isEditing = editing?.list === listKey && editing.id === item.id;
           const isSpeaking = speakingId === item.id;
           return (
             <div
@@ -745,7 +848,7 @@ export default function App() {
               ) : (
                 <>
                   <button
-                    onClick={() => setEditing({ list, id: item.id, value: item.text })}
+                    onClick={() => setEditing({ list: listKey, id: item.id, value: item.text })}
                     title="編輯"
                     className="flex-none rounded-lg border border-slate-200 bg-white p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-600 active:scale-95"
                   >
@@ -753,7 +856,7 @@ export default function App() {
                   </button>
                   <div className="flex flex-none flex-col">
                     <button
-                      onClick={() => moveItem(list, index, -1)}
+                      onClick={() => moveItem(listKey, index, -1)}
                       disabled={index === 0}
                       title="上移"
                       className="rounded-md p-0.5 text-slate-400 hover:bg-slate-200 hover:text-slate-600 disabled:opacity-30"
@@ -761,7 +864,7 @@ export default function App() {
                       <ChevronUp className="h-4 w-4" />
                     </button>
                     <button
-                      onClick={() => moveItem(list, index, 1)}
+                      onClick={() => moveItem(listKey, index, 1)}
                       disabled={index === listItems.length - 1}
                       title="下移"
                       className="rounded-md p-0.5 text-slate-400 hover:bg-slate-200 hover:text-slate-600 disabled:opacity-30"
@@ -770,7 +873,7 @@ export default function App() {
                     </button>
                   </div>
                   <button
-                    onClick={() => removeItem(list, item.id)}
+                    onClick={() => removeItem(listKey, item.id)}
                     title="刪除"
                     className="flex-none rounded-lg border border-slate-200 bg-white p-2 text-rose-400 hover:bg-rose-50 hover:text-rose-500 active:scale-95"
                   >
@@ -785,6 +888,12 @@ export default function App() {
     </section>
   );
 
+  const currentDictationKey = listKeyFor(contentLang, 'dictation');
+  const currentPracticeKey = listKeyFor(contentLang, 'practice');
+  const dictationInfo = getListInfo(currentDictationKey);
+  const practiceInfo = getListInfo(currentPracticeKey);
+  const isEnglish = contentLang === 'en';
+
   return (
     <div className="flex min-h-[100dvh] flex-col bg-gradient-to-br from-slate-50 to-blue-50 font-sans text-slate-800">
       <header className="mx-auto flex w-full max-w-3xl flex-none flex-wrap items-center justify-between gap-2 p-4 md:px-6 print:hidden">
@@ -794,21 +903,34 @@ export default function App() {
           </div>
           <div className="min-w-0">
             <h1 className="truncate text-lg font-black tracking-widest text-slate-800">默書小幫手</h1>
-            <p className="truncate text-[11px] font-bold text-slate-400">輸入詞語／課文，逐項按鍵朗讀</p>
+            <p className="truncate text-[11px] font-bold text-slate-400">中英文默書，逐項按鍵朗讀</p>
           </div>
         </div>
 
         <div className="flex flex-wrap items-center justify-end gap-2">
           <button
-            onClick={toggleLang}
+            onClick={toggleContentLang}
             className={`flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-bold shadow-sm transition-all active:scale-95 ${
-              lang === 'yue' ? 'border-emerald-200 bg-emerald-50 text-emerald-600' : 'border-rose-200 bg-rose-50 text-rose-600'
+              isEnglish ? 'border-indigo-200 bg-indigo-50 text-indigo-600' : 'border-blue-200 bg-blue-50 text-blue-600'
             }`}
-            title="切換朗讀語言"
+            title="切換中／英文模式"
           >
             <Languages className="h-4 w-4" />
-            {lang === 'yue' ? '粵語' : '普通話'}
+            {isEnglish ? 'English' : '中文'}
           </button>
+
+          {!isEnglish && (
+            <button
+              onClick={toggleLang}
+              className={`flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-bold shadow-sm transition-all active:scale-95 ${
+                lang === 'yue' ? 'border-emerald-200 bg-emerald-50 text-emerald-600' : 'border-rose-200 bg-rose-50 text-rose-600'
+              }`}
+              title="切換朗讀語言"
+            >
+              <Languages className="h-4 w-4" />
+              {lang === 'yue' ? '粵語' : '普通話'}
+            </button>
+          )}
 
           <select
             value={String(speed)}
@@ -832,7 +954,7 @@ export default function App() {
                 const separator = value.lastIndexOf('|');
                 next = { name: value.slice(0, separator), lang: value.slice(separator + 1) };
               }
-              setVoiceChoice(prev => ({ ...prev, [lang]: next }));
+              setVoiceChoice(prev => ({ ...prev, [speakLang]: next }));
             }}
             title="朗讀聲線"
             className="max-w-[9.5rem] cursor-pointer rounded-xl border border-slate-200 bg-white px-2 py-2 text-xs font-bold text-slate-600 shadow-sm transition-all focus:border-blue-400 focus:outline-none"
@@ -854,7 +976,7 @@ export default function App() {
             activeTab === 'dictation' ? 'border-blue-300 bg-blue-500 text-white' : 'border-slate-200 bg-white text-slate-500 hover:bg-slate-100'
           }`}
         >
-          <BookOpen className="h-4 w-4" /> 默書{items.length > 0 ? `（${items.length}）` : ''}
+          <BookOpen className="h-4 w-4" /> 默書{dictationInfo.items.length > 0 ? `（${dictationInfo.items.length}）` : ''}
         </button>
         <button
           onClick={() => setActiveTab('practice')}
@@ -862,44 +984,46 @@ export default function App() {
             activeTab === 'practice' ? 'border-blue-300 bg-blue-500 text-white' : 'border-slate-200 bg-white text-slate-500 hover:bg-slate-100'
           }`}
         >
-          <LayoutGrid className="h-4 w-4" /> 練習字{practiceItems.length > 0 ? `（${practiceItems.length}）` : ''}
+          <LayoutGrid className="h-4 w-4" /> 練習字{practiceInfo.items.length > 0 ? `（${practiceInfo.items.length}）` : ''}
         </button>
       </div>
 
       <main className="mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col px-4 pb-4 md:px-6 print:hidden">
-        {activeTab === 'dictation' ? (
-          renderCard(
-            'dictation',
-            items,
-            draft,
-            setDraft,
-            '默書內容',
-            BookOpen,
-            '輸入詞語或課文；用 Space 或換行分隔。標點會自動分行，長句會跟意思自動拆段（每行最多 8 字）。',
-            '尚未輸入任何詞語或課文',
-            '新增（Enter，過長自動分段）',
-          )
-        ) : (
-          renderCard(
-            'practice',
-            practiceItems,
-            practiceDraft,
-            setPracticeDraft,
-            '練習字',
-            LayoutGrid,
-            '每行一個默書唔識嘅字（Space／換行分隔），例如：認真 口 四個字',
-            '尚未輸入任何練習字',
-            '新增（Enter）',
-            <button
-              onClick={() => setShowExport(true)}
-              disabled={practiceItems.length === 0}
-              title="匯出練習紙 PDF（列印另存）"
-              className="flex items-center gap-1 rounded-xl border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-bold text-blue-600 transition-all hover:bg-blue-100 active:scale-95 disabled:opacity-40"
-            >
-              <Printer className="h-3.5 w-3.5" /> 匯出 PDF
-            </button>,
-          )
-        )}
+        {activeTab === 'dictation'
+          ? renderCard(
+              currentDictationKey,
+              dictationInfo.items,
+              dictationInfo.draft,
+              dictationInfo.setDraft,
+              LIST_LABELS[currentDictationKey],
+              BookOpen,
+              isEnglish
+                ? '輸入英文詞語或句子；用 Space 或換行分隔。標點會自動分行，唔會斬開單詞。'
+                : '輸入詞語或課文；用 Space 或換行分隔。標點會自動分行，長句會跟意思自動拆段（每行最多 8 字）。',
+              isEnglish ? '尚未輸入任何英文默書內容' : '尚未輸入任何詞語或課文',
+              isEnglish ? '新增（Enter）' : '新增（Enter，過長自動分段）',
+            )
+          : renderCard(
+              currentPracticeKey,
+              practiceInfo.items,
+              practiceInfo.draft,
+              practiceInfo.setDraft,
+              LIST_LABELS[currentPracticeKey],
+              LayoutGrid,
+              isEnglish
+                ? '每行一個英文生字（Space／換行分隔），例如：apple cat beautiful'
+                : '每行一個默書唔識嘅字（Space／換行分隔），例如：認真 口 四個字',
+              isEnglish ? '尚未輸入任何英文練習字' : '尚未輸入任何練習字',
+              '新增（Enter）',
+              <button
+                onClick={() => setShowExport(true)}
+                disabled={practiceInfo.items.length === 0}
+                title="匯出練習紙 PDF（列印另存）"
+                className="flex items-center gap-1 rounded-xl border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-bold text-blue-600 transition-all hover:bg-blue-100 active:scale-95 disabled:opacity-40"
+              >
+                <Printer className="h-3.5 w-3.5" /> 匯出 PDF
+              </button>,
+            )}
       </main>
 
       {!ttsSupported && (
@@ -934,7 +1058,7 @@ export default function App() {
               </div>
               <div className="mt-4 flex flex-wrap items-center gap-3">
                 <label className="flex items-center gap-2 text-sm font-bold text-slate-600">
-                  每隻字寫幾多次：
+                  {isEnglish ? '每隻字寫幾多次：' : '每隻字寫幾多次：'}
                   <select
                     value={times}
                     onChange={event => setTimes(parseInt(event.target.value, 10))}
@@ -960,20 +1084,21 @@ export default function App() {
                 <span>日期：＿＿＿＿＿＿</span>
               </div>
               <div className="flex flex-wrap gap-x-8 gap-y-10">
-                {practiceItems.map(item => {
-                  const charCount = Math.max(Array.from(item.text).length, 1);
-                  const rows = charCount === 1 ? 1 : times;
-                  const cols = charCount === 1 ? times : charCount;
+                {practiceInfo.items.map(item => {
+                  const chars = Array.from(item.text);
+                  const charCount = Math.max(chars.length, 1);
+                  const perRow = charCount === 1 ? times : Math.min(charCount, 13);
+                  const total = charCount * times;
                   return (
                     <div key={item.id} className="flex items-center gap-3 break-inside-avoid">
-                      <div className="whitespace-nowrap text-[0.9cm] font-bold leading-none tracking-[0.1cm] text-slate-400">
+                      <div className={`font-bold leading-none text-slate-400 ${isEnglish ? 'text-[0.7cm] tracking-[0.05cm]' : 'text-[0.9cm] tracking-[0.1cm]'} whitespace-nowrap`}>
                         {item.text}
                       </div>
                       <div
                         className="grid gap-[0.1cm]"
-                        style={{ gridTemplateColumns: `repeat(${cols}, 1.3cm)` }}
+                        style={{ gridTemplateColumns: `repeat(${perRow}, 1.3cm)` }}
                       >
-                        {Array.from({ length: rows * cols }).map((_, i) => (
+                        {Array.from({ length: total }).map((_, i) => (
                           <div
                             key={i}
                             className="border border-slate-500"

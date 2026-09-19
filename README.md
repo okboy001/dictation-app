@@ -1,23 +1,25 @@
 # 默書小幫手
 
-小朋友默書工具：輸入詞語同課文，逐項按鍵朗讀，方便隨時加減句子同課文。全程喺瀏覽器運行（Web Speech API），唔需要 API key，亦唔使用麥克風。
+小朋友默書工具：中英文默書，輸入詞語同課文，逐項按鍵朗讀，方便隨時加減句子同課文。全程喺瀏覽器運行（Web Speech API），唔需要 API key，亦唔使用麥克風。
 
 ## 功能
 
+- **中／英切換**：頂部「中文／English」切換，中文同英文各自有四套獨立清單（默書、練習字），互不影響。
 - **「默書」清單**：詞語同課文放喺同一個清單，可新增、編輯、刪除、上移、下移，亦可一鍵「清除全部」（會先彈確認；雲端內容亦會一併清除）。
-- **「練習字」分頁**：輸入默書唔識嘅字（1–4 字），逐字撳掣重溫讀音；仲可以「匯出 PDF」整一張 A4 練習紙：每個字左邊有灰色示範字，右邊 1.3cm × 1.3cm 格仔，全張統一揀「寫幾多次」1–5 次（例如「認真」×2 → 2 行 × 2 格），列印時另存為 PDF。
-- **自動分段**：用 **Space 或換行分隔**每項；**標點符號自己一行**（連續標點同一行，引號／括號黐住文字）。若一行超過 **8 個字**（唔計標點），會按詞語邊界拆開（唔會斬開詞語），切口盡量自然。
-- **逐項朗讀**：每一項都有播放掣，點文字亦可播放；朗讀時會讀出標點名（`，`→逗號、`。`→句號、`！`→感嘆號、`？`→問號、`、`→頓號、`；`→分號、`：`→冒號、`…`→省略號、`「」『』`→引號），方便小朋友寫返標點。
-- **語言切換**：普通話（`zh-CN`，**預設**，包括台灣國語 `zh-TW` 候選）／粵語（`zh-HK`），另有「聲線」下拉列出裝置**全部**聲線，粵、普各自記憶。搵唔到相應聲線會提示安裝（macOS：系統設定 → 輔助使用 → 朗讀內容 → 系統聲音 → 管理聲音 → 下載「普通話（中國）」）。
+- **「練習字」分頁**：輸入默書唔識嘅字（中文 1–4 字／英文生字），逐字撳掣重溫讀音；仲可以「匯出 PDF」整一張 A4 練習紙：每個字左邊有灰色示範字，右邊 1.3cm × 1.3cm 格仔（英文一格一個字母），全張統一揀「寫幾多次」1–5 次（例如「認真」×2 → 2 行 × 2 格），列印時另存為 PDF。
+- **中文分段規則**：用 **Space 或換行分隔**每項；**標點符號自己一行**（連續標點同一行，引號／括號黐住文字）。若一行超過 **8 個字**（唔計標點），會按詞語邊界拆開（唔會斬開詞語）。
+- **英文分段規則**：按 **Space／換行**逐個單詞分隔，**唔會斬開單詞**；標點符號自己一行。
+- **逐項朗讀**：每一項都有播放掣，點文字亦可播放；朗讀時會讀出標點名（中文：`，`→逗號、`。`→句號、`「」`→引號等；英文：`,`→comma、`.`→period、`!`→exclamation mark 等），方便小朋友寫返標點。
+- **語言切換**：中文模式可揀普通話（`zh-CN`，**預設**，包括台灣國語 `zh-TW` 候選）／粵語（`zh-HK`）；英文模式用美式英文（`en-US`）預設。另有「聲線」下拉列出裝置**全部**聲線，各語言各自記憶。搵唔到相應聲線會提示安裝。
 - **語速切換**：下拉揀 `0.2x`（更慢）／`0.25x`（極慢）／`0.3x`（超慢）／`0.4x`（預設）／`0.5x`（慢）／`0.6x`／`0.75x`／`0.85x`／`1.0x`。
-- **雲端同步**：默書內容同步去 Sheet「默書內容」、練習字同步去 Sheet「練習字」（同一份 Google Sheet）。改動後約一秒自動儲存；開 app 或返到頁面時自動載入。離線時會保留本機內容，恢復後自動重試。
+- **雲端同步**：四套清單各自同步去 Google Sheet：`默書內容`、`練習字`、`英文默書`、`英文練習字`。改動後約一秒自動儲存；開 app 或返到頁面時自動載入。離線時會保留本機內容，恢復後自動重試。
 - **自動儲存**：內容同設定會存喺瀏覽器 `localStorage`，下次打開自動載入。
 
 朗讀使用瀏覽器內置語音合成，建議用 Chrome、Edge 或 Safari。
 
 ## 雲端同步（Google Sheet + Apps Script）
 
-App 會同步去一份 Google Sheet：`默書內容` sheet 嘅 A1 係標題、A2 起每列一項；`練習字` sheet 同樣。你可以隨時直接喺 Sheet 加減內容。
+App 會同步去一份 Google Sheet，四個 sheet：`默書內容`、`練習字`、`英文默書`、`英文練習字`；每個 sheet 嘅 A1 係標題、A2 起每列一項。你可以隨時直接喺 Sheet 加減內容。
 
 初次設定步驟：
 
@@ -32,11 +34,20 @@ App 會同步去一份 Google Sheet：`默書內容` sheet 嘅 A1 係標題、A2
 Apps Script 腳本：
 
 ```js
-const SHEET_NAME = '默書內容';
-const PRACTICE_SHEET_NAME = '練習字';
+const SHEETS = {
+  items: '默書內容',
+  practice: '練習字',
+  enItems: '英文默書',
+  enPractice: '英文練習字',
+};
 
 function doGet() {
-  return jsonResponse({ ok: true, items: getItems(SHEET_NAME), practice: getItems(PRACTICE_SHEET_NAME) });
+  return jsonResponse({ ok: true,
+    items: getItems(SHEETS.items),
+    practice: getItems(SHEETS.practice),
+    enItems: getItems(SHEETS.enItems),
+    enPractice: getItems(SHEETS.enPractice),
+  });
 }
 
 function doPost(e) {
@@ -45,9 +56,11 @@ function doPost(e) {
     return jsonResponse({ ok: false, error: 'bad_json' });
   }
   if (e.parameter.action === 'set') {
-    const count = setItems(SHEET_NAME, data.items || []);
-    const practiceCount = setItems(PRACTICE_SHEET_NAME, data.practice || []);
-    return jsonResponse({ ok: true, count, practiceCount });
+    const counts = {};
+    for (const key of Object.keys(SHEETS)) {
+      counts[key] = setItems(SHEETS[key], data[key] || []);
+    }
+    return jsonResponse({ ok: true, counts });
   }
   return jsonResponse({ ok: false, error: 'unknown_action' });
 }
