@@ -121,21 +121,23 @@ function polishGroups(groups: string[][]): string[][] {
 function splitByPunctuation(text: string): string[] {
   const chunks: string[] = [];
   let current = '';
+  let punctRun = '';
   for (const char of Array.from(text)) {
     if (SPLIT_PUNCT.has(char)) {
-      if (countChars(current) > 0) {
-        current += char;
+      if (current) {
         chunks.push(current);
         current = '';
-      } else if (chunks.length > 0) {
-        chunks[chunks.length - 1] += char;
-      } else {
-        current += char;
       }
+      punctRun += char;
     } else {
+      if (punctRun) {
+        chunks.push(punctRun);
+        punctRun = '';
+      }
       current += char;
     }
   }
+  if (punctRun) chunks.push(punctRun);
   if (current) chunks.push(current);
   return chunks;
 }
@@ -226,7 +228,7 @@ function parseToItems(raw: string): string[] {
   const out: string[] = [];
   for (const token of raw.split(/\s+/)) {
     const entry = token.trim();
-    if (!entry || countChars(entry) === 0) continue;
+    if (!entry) continue;
     out.push(...splitEntry(entry));
   }
   return out;
