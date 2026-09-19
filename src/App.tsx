@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef, type ReactNode } fro
 import { Volume2, Trash2, Pencil, ChevronUp, ChevronDown, Plus, Languages, BookOpen, Check, X, LayoutGrid, Printer, type LucideIcon } from 'lucide-react';
 
 const MAX_CHUNK = 8;
+const MAX_EN_WORDS = 8;
 
 const CLOUD_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbw66TzpUPKu5M7m01KICQ4F1iNVZyVBPcJ8d2lpDLubDkZMv6ANI2Djvgse9tT2QU2GqQ/exec';
 
@@ -31,6 +32,11 @@ const LIST_LABELS: Record<ListKey, string> = {
   enDictation: '英文默書',
   enPractice: '英文練習字',
 };
+
+const EN_LEADING_WORDS = new Set([
+  'the', 'a', 'an', 'and', 'or', 'but', 'to', 'of', 'in', 'on', 'at',
+  'is', 'are', 'was', 'were', 'for', 'with', 'by', 'from', 'that', 'this',
+]);
 
 const PARTICLES = new Set([
   '的', '了', '著', '着', '嗎', '吗', '呢', '吧', '啊', '呀',
@@ -248,12 +254,86 @@ function parsePracticeItems(raw: string): string[] {
   return raw.split(/\s+/).map(token => token.trim()).filter(Boolean);
 }
 
-function parseEnglishItems(raw: string): string[] {
+function splitEnWordRun(text: string): string[] {
+  const words = text.trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return [];
+  if (words.length <= MAX_EN_WORDS) return [words.join(' ')];
+
+  const split = (start: number, end: number): string[][] => {
+    const len = end - start;
+    if (len <= MAX_EN_WORDS) return [words.slice(start, end)];
+
+    let best = -1;
+    let bestScore = Infinity;
+    for (let b = start + 1; b < end; b++) {
+      const left = b - start;
+      const right = end - b;
+      if (left <= MAX_EN_WORDS && right <= MAX_EN_WORDS) {
+        const score = Math.abs(left - right);
+        if (score < bestScore) {
+          bestScore = score;
+          best = b;
+        }
+      }
+    }
+
+    if (best === -1) {
+      const out: string[][] = [];
+      let current: string[] = [];
+      for (let i = start; i < end; i++) {
+        if (current.length >= MAX_EN_WORDS) {
+          out.push(current);
+          current = [];
+        }
+        current.push(words[i]);
+      }
+      if (current.length > 0) out.push(current);
+      return out;
+    }
+
+    return [...split(start, best), ...split(best, end)];
+  };
+
+  const groups = split(0, words.length);
+
+  for (let i = 0; i < groups.length - 1; i++) {
+    const current = groups[i];
+    const next = groups[i + 1];
+    const first = next[0];
+    if (first && EN_LEADING_WORDS.has(first.toLowerCase()) && current.length > 1) {
+      const lastWord = current[current.length - 1];
+      if (next.length + 1 <= MAX_EN_WORDS) {
+        current.pop();
+        next.unshift(lastWord);
+      }
+    }
+  }
+
+  return groups.map(parts => parts.join(' '));
+}
+
+function parseEnglishWords(raw: string): string[] {
   const out: string[] = [];
   for (const token of raw.split(/\s+/)) {
     const entry = token.trim();
     if (!entry) continue;
     out.push(...splitByPunctuation(entry));
+  }
+  return out;
+}
+
+function parseEnglishPassage(raw: string): string[] {
+  const out: string[] = [];
+  for (const line of raw.split(/\r?\n/)) {
+    const entry = line.trim();
+    if (!entry) continue;
+    for (const clause of splitByPunctuation(entry)) {
+      if (countChars(clause) === 0) {
+        out.push(clause);
+        continue;
+      }
+      out.push(...splitEnWordRun(clause));
+    }
   }
   return out;
 }
@@ -645,7 +725,8 @@ export default function App() {
   const parseFor = (key: ListKey, raw: string): string[] => {
     if (key === 'zhDictation') return parseToItems(raw);
     if (key === 'zhPractice') return parsePracticeItems(raw);
-    return parseEnglishItems(raw);
+    if (key === 'enPractice') return parseEnglishWords(raw);
+    return parseEnglishPassage(raw);
   };
 
   const addItems = (key: ListKey, raw: string) => {
@@ -998,7 +1079,7 @@ export default function App() {
               LIST_LABELS[currentDictationKey],
               BookOpen,
               isEnglish
-                ? '輸入英文詞語或句子；用 Space 或換行分隔。標點會自動分行，唔會斬開單詞。'
+                ? '輸入英文課文；換行分段。標點會自動分行，每段約 8 個詞，唔會斬開單詞。'
                 : '輸入詞語或課文；用 Space 或換行分隔。標點會自動分行，長句會跟意思自動拆段（每行最多 8 字）。',
               isEnglish ? '尚未輸入任何英文默書內容' : '尚未輸入任何詞語或課文',
               isEnglish ? '新增（Enter）' : '新增（Enter，過長自動分段）',
