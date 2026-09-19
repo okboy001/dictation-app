@@ -322,7 +322,10 @@ export default function App() {
       ...(loadItems('dictation_sentences_v1') ?? []),
     ];
   });
-  const [lang, setLang] = useState<Lang>(() => (localStorage.getItem('dictation_lang_v1') === 'pu' ? 'pu' : 'yue'));
+  const [lang, setLang] = useState<Lang>(() => {
+    const stored = localStorage.getItem('dictation_lang_v2');
+    return stored === 'yue' ? 'yue' : 'pu';
+  });
   const [speed, setSpeed] = useState<number>(() => {
     const stored = parseFloat(localStorage.getItem('dictation_speed_v1') || '');
     return SPEED_OPTIONS.some(option => option.value === stored) ? stored : 0.4;
@@ -348,7 +351,7 @@ export default function App() {
   useEffect(() => { itemsRef.current = items; }, [items]);
 
   useEffect(() => { localStorage.setItem('dictation_items_v1', JSON.stringify(items)); }, [items]);
-  useEffect(() => { localStorage.setItem('dictation_lang_v1', lang); }, [lang]);
+  useEffect(() => { localStorage.setItem('dictation_lang_v2', lang); }, [lang]);
   useEffect(() => { localStorage.setItem('dictation_speed_v1', String(speed)); }, [speed]);
   useEffect(() => {
     localStorage.setItem('dictation_voice_yue_v1', JSON.stringify(voiceChoice.yue));
