@@ -1,11 +1,12 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Volume2, Trash2, Pencil, ChevronUp, ChevronDown, Plus, Languages, BookOpen, Check, X } from 'lucide-react';
 
-const MAX_CHUNK = 10;
+const MAX_CHUNK = 8;
 
 const CLOUD_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbw66TzpUPKu5M7m01KICQ4F1iNVZyVBPcJ8d2lpDLubDkZMv6ANI2Djvgse9tT2QU2GqQ/exec';
 
 const SPEED_OPTIONS = [
+  { value: 0.2, label: '0.2x（更慢）' },
   { value: 0.25, label: '0.25x（極慢）' },
   { value: 0.3, label: '0.3x（超慢）' },
   { value: 0.4, label: '0.4x（預設）' },
@@ -213,8 +214,6 @@ function splitByWords(clause: string): string[] {
 }
 
 function splitEntry(entry: string): string[] {
-  if (countChars(entry) <= MAX_CHUNK) return [entry];
-
   const out: string[] = [];
   for (const clause of splitByPunctuation(entry)) {
     if (countChars(clause) <= MAX_CHUNK) out.push(clause);
@@ -662,7 +661,7 @@ export default function App() {
                 }
               }}
               rows={3}
-              placeholder="輸入詞語或課文；用 Space 或換行分隔。標點會保留，長句會跟意思自動拆段（每段最多 10 字）。"
+              placeholder="輸入詞語或課文；用 Space 或換行分隔。標點會自動分行，長句會跟意思自動拆段（每行最多 8 字）。"
               className="w-full resize-none rounded-xl border-2 border-slate-200 bg-slate-50 px-3 py-2 font-medium text-slate-700 transition-all focus:border-blue-400 focus:bg-white focus:outline-none"
             />
             <button
