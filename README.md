@@ -4,21 +4,22 @@
 
 ## 功能
 
-- **單一清單**：詞語同課文放喺同一個清單，可新增、編輯、刪除、上移、下移，亦可一鍵「清除全部」（會先彈確認；雲端內容亦會一併清除）。
+- **「默書」清單**：詞語同課文放喺同一個清單，可新增、編輯、刪除、上移、下移，亦可一鍵「清除全部」（會先彈確認；雲端內容亦會一併清除）。
+- **「練習字」分頁**：輸入默書唔識嘅字（1–4 字），逐字撳掣重溫讀音；仲可以「匯出 PDF」整一張 A4 練習紙：每個字左邊有灰色示範字，右邊 1.3cm × 1.3cm 格仔，全張統一揀「寫幾多次」1–5 次（例如「認真」×2 → 2 行 × 2 格），列印時另存為 PDF。
 - **自動分段**：用 **Space 或換行分隔**每項；**標點符號自己一行**（連續標點同一行，引號／括號黐住文字）。若一行超過 **8 個字**（唔計標點），會按詞語邊界拆開（唔會斬開詞語），切口盡量自然。
 - **逐項朗讀**：每一項都有播放掣，點文字亦可播放；朗讀時會讀出標點名（`，`→逗號、`。`→句號、`！`→感嘆號、`？`→問號、`、`→頓號、`；`→分號、`：`→冒號、`…`→省略號、`「」『』`→引號），方便小朋友寫返標點。
 - **語言切換**：普通話（`zh-CN`，**預設**，包括台灣國語 `zh-TW` 候選）／粵語（`zh-HK`），另有「聲線」下拉列出裝置**全部**聲線，粵、普各自記憶。搵唔到相應聲線會提示安裝（macOS：系統設定 → 輔助使用 → 朗讀內容 → 系統聲音 → 管理聲音 → 下載「普通話（中國）」）。
 - **語速切換**：下拉揀 `0.2x`（更慢）／`0.25x`（極慢）／`0.3x`（超慢）／`0.4x`（預設）／`0.5x`（慢）／`0.6x`／`0.75x`／`0.85x`／`1.0x`。
-- **雲端同步**：內容會自動同步去你嘅 Google Sheet（見下）。改動後約一秒自動儲存；開 app 或返到頁面時自動載入。離線時會保留本機內容，恢復後自動重試。
+- **雲端同步**：默書內容同步去 Sheet「默書內容」、練習字同步去 Sheet「練習字」（同一份 Google Sheet）。改動後約一秒自動儲存；開 app 或返到頁面時自動載入。離線時會保留本機內容，恢復後自動重試。
 - **自動儲存**：內容同設定會存喺瀏覽器 `localStorage`，下次打開自動載入。
 
 朗讀使用瀏覽器內置語音合成，建議用 Chrome、Edge 或 Safari。
 
 ## 雲端同步（Google Sheet + Apps Script）
 
-App 會將內容同步去一份 Google Sheet：A1 係標題「內容」，A2 起每列一項，你可以隨時直接喺 Sheet 加減內容。
+App 會同步去一份 Google Sheet：`默書內容` sheet 嘅 A1 係標題、A2 起每列一項；`練習字` sheet 同樣。你可以隨時直接喺 Sheet 加減內容。
 
-設定步驟：
+初次設定步驟：
 
 1. 開新 Google Sheet，分享 → 任何知道連結嘅人 → 編輯者。
 2. 擴充功能 → Apps Script → 貼上下方腳本 → 儲存。
@@ -26,13 +27,16 @@ App 會將內容同步去一份 Google Sheet：A1 係標題「內容」，A2 起
 4. 自己用瀏覽器開一次該 `/exec` 網址，完成首次授權。
 5. 將網址寫入 `src/App.tsx` 嘅 `CLOUD_SCRIPT_URL` 常數，重新部署網站。
 
+更新腳本（例如加咗練習字 sheet）時，用「部署 → 管理部署 → 編輯 → 版本：新版本 → 部署」，網址唔會變。
+
 Apps Script 腳本：
 
 ```js
 const SHEET_NAME = '默書內容';
+const PRACTICE_SHEET_NAME = '練習字';
 
 function doGet() {
-  return jsonResponse({ ok: true, items: getItems() });
+  return jsonResponse({ ok: true, items: getItems(SHEET_NAME), practice: getItems(PRACTICE_SHEET_NAME) });
 }
 
 function doPost(e) {
@@ -41,14 +45,15 @@ function doPost(e) {
     return jsonResponse({ ok: false, error: 'bad_json' });
   }
   if (e.parameter.action === 'set') {
-    const count = setItems(data.items || []);
-    return jsonResponse({ ok: true, count });
+    const count = setItems(SHEET_NAME, data.items || []);
+    const practiceCount = setItems(PRACTICE_SHEET_NAME, data.practice || []);
+    return jsonResponse({ ok: true, count, practiceCount });
   }
   return jsonResponse({ ok: false, error: 'unknown_action' });
 }
 
-function getItems() {
-  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_NAME);
+function getItems(sheetName) {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(sheetName);
   if (!sheet) return [];
   const rows = sheet.getLastRow() - 1;
   if (rows <= 0) return [];
@@ -58,12 +63,12 @@ function getItems() {
     .slice(0, 2000);
 }
 
-function setItems(items) {
+function setItems(sheetName, items) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  let sheet = ss.getSheetByName(SHEET_NAME);
-  if (!sheet) sheet = ss.insertSheet(SHEET_NAME);
+  let sheet = ss.getSheetByName(sheetName);
+  if (!sheet) sheet = ss.insertSheet(sheetName);
   sheet.clearContents();
-  sheet.getRange(1, 1).setValue('內容');
+  sheet.getRange(1, 1).setValue(sheetName);
   const clean = items
     .filter(item => typeof item === 'string')
     .map(item => item.trim().slice(0, 200))
