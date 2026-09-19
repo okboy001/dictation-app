@@ -1,8 +1,16 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { Volume2, Trash2, Pencil, ChevronUp, ChevronDown, Plus, Gauge, Languages, BookOpen, Check, X } from 'lucide-react';
+import { Volume2, Trash2, Pencil, ChevronUp, ChevronDown, Plus, Languages, BookOpen, Check, X } from 'lucide-react';
 
 const MAX_CHUNK = 8;
-const SPEEDS = [0.6, 0.85, 1.0];
+
+const SPEED_OPTIONS = [
+  { value: 0.4, label: '0.4x（好慢）' },
+  { value: 0.5, label: '0.5x（慢）' },
+  { value: 0.6, label: '0.6x' },
+  { value: 0.75, label: '0.75x' },
+  { value: 0.85, label: '0.85x（預設）' },
+  { value: 1.0, label: '1.0x' },
+] as const;
 
 type DictationItem = { id: string; text: string };
 type Lang = 'yue' | 'pu';
@@ -302,7 +310,7 @@ export default function App() {
   const [lang, setLang] = useState<Lang>(() => (localStorage.getItem('dictation_lang_v1') === 'pu' ? 'pu' : 'yue'));
   const [speed, setSpeed] = useState<number>(() => {
     const stored = parseFloat(localStorage.getItem('dictation_speed_v1') || '');
-    return Number.isNaN(stored) ? 0.85 : stored;
+    return SPEED_OPTIONS.some(option => option.value === stored) ? stored : 0.85;
   });
   const [voiceChoice, setVoiceChoice] = useState<Record<Lang, StoredVoice | null>>(() => ({
     yue: loadVoiceChoice('dictation_voice_yue_v1'),
@@ -445,12 +453,6 @@ export default function App() {
 
   const toggleLang = () => setLang(prev => (prev === 'yue' ? 'pu' : 'yue'));
 
-  const cycleSpeed = () =>
-    setSpeed(prev => {
-      const index = SPEEDS.indexOf(prev);
-      return SPEEDS[(index + 1) % SPEEDS.length];
-    });
-
   const currentChoice = voiceChoice[lang];
 
   return (
@@ -478,16 +480,18 @@ export default function App() {
             {lang === 'yue' ? '粵語' : '普通話'}
           </button>
 
-          <button
-            onClick={cycleSpeed}
-            className={`flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-bold shadow-sm transition-all active:scale-95 ${
-              speed !== 0.85 ? 'border-purple-200 bg-purple-50 text-purple-600' : 'border-slate-200 bg-white text-slate-500 hover:bg-slate-100'
-            }`}
-            title="調整語速"
+          <select
+            value={String(speed)}
+            onChange={event => setSpeed(parseFloat(event.target.value))}
+            title="朗讀速度"
+            className="max-w-[7.5rem] cursor-pointer rounded-xl border border-slate-200 bg-white px-2 py-2 text-xs font-bold text-slate-600 shadow-sm transition-all focus:border-blue-400 focus:outline-none"
           >
-            <Gauge className="h-4 w-4" />
-            {speed}x
-          </button>
+            {SPEED_OPTIONS.map(option => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
 
           <select
             value={currentChoice ? `${currentChoice.name}|${currentChoice.lang}` : ''}
