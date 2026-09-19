@@ -1,14 +1,18 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Volume2, Trash2, Pencil, ChevronUp, ChevronDown, Plus, Languages, BookOpen, Check, X } from 'lucide-react';
 
-const MAX_CHUNK = 8;
+const MAX_CHUNK = 10;
+
+const CLOUD_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbw66TzpUPKu5M7m01KICQ4F1iNVZyVBPcJ8d2lpDLubDkZMv6ANI2Djvgse9tT2QU2GqQ/exec';
 
 const SPEED_OPTIONS = [
-  { value: 0.4, label: '0.4x（好慢）' },
+  { value: 0.25, label: '0.25x（極慢）' },
+  { value: 0.3, label: '0.3x（超慢）' },
+  { value: 0.4, label: '0.4x（預設）' },
   { value: 0.5, label: '0.5x（慢）' },
   { value: 0.6, label: '0.6x' },
   { value: 0.75, label: '0.75x' },
-  { value: 0.85, label: '0.85x（預設）' },
+  { value: 0.85, label: '0.85x' },
   { value: 1.0, label: '1.0x' },
 ] as const;
 
@@ -261,11 +265,6 @@ function normalizeLang(value: string): string {
   return value.replace(/_/g, '-').toLowerCase();
 }
 
-function isChineseFamily(lang: string): boolean {
-  const n = normalizeLang(lang);
-  return n.startsWith('zh') || n.startsWith('cmn') || n.startsWith('yue');
-}
-
 function localeFor(lang: Lang): string {
   return lang === 'yue' ? 'zh-HK' : 'zh-CN';
 }
@@ -280,7 +279,8 @@ function voiceScoreFor(voice: SpeechSynthesisVoice, lang: Lang): number {
     return 0;
   }
   if (n === 'zh-cn' || n.startsWith('zh-hans') || n.startsWith('cmn')) return 3;
-  if (/ting-ting|tingting|mandarin|普通话|普通話|huihui|yaoyao/.test(name)) return 2;
+  if (/ting-ting|tingting|mandarin|普通话|普通話|國語|国语|huihui|yaoyao|mei-jia/.test(name)) return 2;
+  if (n === 'zh-tw') return 2;
   if (n === 'zh') return 1;
   return 0;
 }
@@ -298,6 +298,21 @@ function pickVoice(lang: Lang, list: SpeechSynthesisVoice[]): SpeechSynthesisVoi
   return best;
 }
 
+function speakableText(text: string): string {
+  return text
+    .replace(/(\d)\.(\d)/g, '$1點$2')
+    .replace(/…|\.\.\./g, '省略號')
+    .replace(/，|,/g, '逗號')
+    .replace(/。|\./g, '句號')
+    .replace(/！|!/g, '感嘆號')
+    .replace(/？|\?/g, '問號')
+    .replace(/、/g, '頓號')
+    .replace(/；|;/g, '分號')
+    .replace(/：|:/g, '冒號')
+    .replace(/「|『/g, '引號')
+    .replace(/」|』/g, '引號');
+}
+
 export default function App() {
   const [items, setItems] = useState<DictationItem[]>(() => {
     const existing = loadItems('dictation_items_v1');
@@ -310,7 +325,7 @@ export default function App() {
   const [lang, setLang] = useState<Lang>(() => (localStorage.getItem('dictation_lang_v1') === 'pu' ? 'pu' : 'yue'));
   const [speed, setSpeed] = useState<number>(() => {
     const stored = parseFloat(localStorage.getItem('dictation_speed_v1') || '');
-    return SPEED_OPTIONS.some(option => option.value === stored) ? stored : 0.85;
+    return SPEED_OPTIONS.some(option => option.value === stored) ? stored : 0.4;
   });
   const [voiceChoice, setVoiceChoice] = useState<Record<Lang, StoredVoice | null>>(() => ({
     yue: loadVoiceChoice('dictation_voice_yue_v1'),
@@ -323,6 +338,14 @@ export default function App() {
   const [editing, setEditing] = useState<Editing>(null);
   const [draft, setDraft] = useState('');
   const [notice, setNotice] = useState<string | null>(null);
+
+  const [cloudStatus, setCloudStatus] = useState<'idle' | 'loading' | 'saving' | 'synced' | 'error'>('idle');
+  const [cloudError, setCloudError] = useState('');
+
+  const itemsRef = useRef(items);
+  const skipSaveRef = useRef(true);
+
+  useEffect(() => { itemsRef.current = items; }, [items]);
 
   useEffect(() => { localStorage.setItem('dictation_items_v1', JSON.stringify(items)); }, [items]);
   useEffect(() => { localStorage.setItem('dictation_lang_v1', lang); }, [lang]);
@@ -352,10 +375,9 @@ export default function App() {
     return () => clearTimeout(id);
   }, [notice]);
 
-  const chineseVoices = useMemo(() => {
+  const voiceOptions = useMemo(() => {
     const seen = new Set<string>();
     const unique = voices.filter(voice => {
-      if (!isChineseFamily(voice.lang)) return false;
       const key = `${voice.name}|${voice.lang}`;
       if (seen.has(key)) return false;
       seen.add(key);
@@ -365,6 +387,83 @@ export default function App() {
       (a, b) => voiceScoreFor(b, lang) - voiceScoreFor(a, lang) || a.name.localeCompare(b.name),
     );
   }, [voices, lang]);
+
+  const saveToCloud = useCallback(async (list: DictationItem[]) => {
+    if (!CLOUD_SCRIPT_URL) return;
+    setCloudStatus('saving');
+    try {
+      const res = await fetch(`${CLOUD_SCRIPT_URL}?action=set`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain' },
+        body: JSON.stringify({ items: list.map(item => item.text) }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      if (!data || data.ok !== true) throw new Error('API error');
+      setCloudStatus('synced');
+    } catch {
+      setCloudStatus('error');
+      setCloudError('儲存失敗，稍後會自動重試');
+    }
+  }, []);
+
+  const loadFromCloud = useCallback(async () => {
+    if (!CLOUD_SCRIPT_URL) return;
+    setCloudStatus('loading');
+    try {
+      const res = await fetch(`${CLOUD_SCRIPT_URL}?action=get`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      if (!data || !Array.isArray(data.items)) throw new Error('bad payload');
+      const cloudItems: DictationItem[] = data.items.map((text: string) => ({ id: makeId(), text }));
+
+      const firstSynced = localStorage.getItem('dictation_cloud_first_sync_v1') === '1';
+      if (!firstSynced) {
+        if (cloudItems.length === 0 && itemsRef.current.length > 0) {
+          localStorage.setItem('dictation_cloud_first_sync_v1', '1');
+          skipSaveRef.current = false;
+          await saveToCloud(itemsRef.current);
+          return;
+        }
+        if (itemsRef.current.length > 0) {
+          localStorage.setItem('dictation_items_backup_v1', JSON.stringify(itemsRef.current));
+        }
+        localStorage.setItem('dictation_cloud_first_sync_v1', '1');
+      }
+
+      skipSaveRef.current = true;
+      setEditing(null);
+      setItems(cloudItems);
+      setCloudStatus('synced');
+    } catch {
+      setCloudStatus('error');
+      setCloudError('載入失敗，保留本機內容');
+    }
+  }, [saveToCloud]);
+
+  useEffect(() => {
+    if (!CLOUD_SCRIPT_URL) return;
+    if (skipSaveRef.current) {
+      skipSaveRef.current = false;
+      return;
+    }
+    const id = setTimeout(() => { saveToCloud(items); }, 800);
+    return () => clearTimeout(id);
+  }, [items, saveToCloud]);
+
+  useEffect(() => {
+    if (!CLOUD_SCRIPT_URL) return;
+    loadFromCloud();
+  }, [loadFromCloud]);
+
+  useEffect(() => {
+    if (!CLOUD_SCRIPT_URL) return;
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') loadFromCloud();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => document.removeEventListener('visibilitychange', onVisibility);
+  }, [loadFromCloud]);
 
   const speak = useCallback((id: string, text: string) => {
     if (!('speechSynthesis' in window)) {
@@ -384,7 +483,7 @@ export default function App() {
     }
     if (!voice) voice = pickVoice(lang, list);
 
-    const utterance = new SpeechSynthesisUtterance(text);
+    const utterance = new SpeechSynthesisUtterance(speakableText(text));
     utterance.lang = voice?.lang || localeFor(lang);
     if (voice) {
       utterance.voice = voice;
@@ -444,7 +543,7 @@ export default function App() {
 
   const clearAll = () => {
     if (items.length === 0) return;
-    if (!window.confirm(`確定清除全部 ${items.length} 段內容？此動作無法復原。`)) return;
+    if (!window.confirm(`確定清除全部 ${items.length} 段內容？雲端內容都會被清除。此動作無法復原。`)) return;
     if ('speechSynthesis' in window) window.speechSynthesis.cancel();
     setSpeakingId(null);
     setEditing(null);
@@ -508,7 +607,7 @@ export default function App() {
             className="max-w-[9.5rem] cursor-pointer rounded-xl border border-slate-200 bg-white px-2 py-2 text-xs font-bold text-slate-600 shadow-sm transition-all focus:border-blue-400 focus:outline-none"
           >
             <option value="">聲線：自動</option>
-            {chineseVoices.map(voice => (
+            {voiceOptions.map(voice => (
               <option key={`${voice.name}|${voice.lang}`} value={`${voice.name}|${voice.lang}`}>
                 {voice.name} ({voice.lang})
               </option>
@@ -526,6 +625,18 @@ export default function App() {
             </h2>
             <div className="flex flex-none items-center gap-2">
               <span className="text-xs font-bold text-slate-400">{items.length} 段</span>
+              <span
+                title={cloudError || undefined}
+                className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${
+                  cloudStatus === 'error' ? 'bg-amber-100 text-amber-600'
+                  : cloudStatus === 'synced' ? 'bg-emerald-100 text-emerald-600'
+                  : cloudStatus === 'saving' ? 'bg-blue-100 text-blue-600'
+                  : cloudStatus === 'loading' ? 'bg-blue-100 text-blue-600'
+                  : 'bg-slate-100 text-slate-400'
+                }`}
+              >
+                {cloudStatus === 'error' ? '雲端失敗' : cloudStatus === 'synced' ? '已同步' : cloudStatus === 'saving' ? '儲存中' : cloudStatus === 'loading' ? '載入中' : '雲端'}
+              </span>
               <button
                 onClick={clearAll}
                 disabled={items.length === 0}
@@ -548,7 +659,7 @@ export default function App() {
                 }
               }}
               rows={3}
-              placeholder="輸入詞語或課文；用 Space 或換行分隔。標點會保留，長句會跟意思自動拆段。"
+              placeholder="輸入詞語或課文；用 Space 或換行分隔。標點會保留，長句會跟意思自動拆段（每段最多 10 字）。"
               className="w-full resize-none rounded-xl border-2 border-slate-200 bg-slate-50 px-3 py-2 font-medium text-slate-700 transition-all focus:border-blue-400 focus:bg-white focus:outline-none"
             />
             <button
