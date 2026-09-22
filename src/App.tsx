@@ -1363,62 +1363,46 @@ export default function App() {
                 <span>姓名：＿＿＿＿＿＿</span>
                 <span>日期：＿＿＿＿＿＿</span>
               </div>
-              <div className="flex flex-col gap-y-[1cm]">
+              <div className="flex flex-col gap-y-[0.8cm]">
                 {practiceInfo.items.map((item, index) => {
-                  if (isEnglish) {
-                    const letters = Math.max(Array.from(item.text).length, 1);
-                    const letterSizeCm = Math.min(0.55, 5.5 / letters);
-                    return (
-                      <div key={item.id} className="break-inside-avoid">
-                        <div className="flex items-start">
-                          <div className="w-[1.2cm] flex-none pt-[0.15cm] text-[0.6cm] font-bold text-black">
-                            {index + 1}.
-                          </div>
-                          <div
-                            className="w-[6cm] flex-none overflow-hidden whitespace-nowrap font-bold leading-none text-black"
-                            style={{ fontSize: `${letterSizeCm}cm` }}
-                          >
-                            {item.text}
-                          </div>
-                          <div className="flex min-w-0 flex-1 flex-col gap-[0.7cm]">
-                            {Array.from({ length: times }).map((_, i) => (
-                              <div
-                                key={i}
-                                className="border-b-[0.05cm] border-black"
-                                style={{ height: '0.9cm' }}
-                              />
-                            ))}
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  }
-
                   const chars = Array.from(item.text);
                   const charCount = Math.max(chars.length, 1);
-                  const perRow = charCount === 1 ? times : Math.min(charCount, 13);
-                  const total = charCount * times;
+                  const letterSizeCm = Math.min(0.55, 5.5 / charCount);
                   return (
                     <div key={item.id} className="break-inside-avoid">
-                      <div className="flex items-start">
-                        <div className="w-[1.2cm] flex-none pt-[0.35cm] text-[0.6cm] font-bold text-black">
-                          {index + 1}.
+                      <div className="flex flex-wrap items-start gap-x-[0.4cm] gap-y-[0.5cm]">
+                        <div className="flex flex-none items-baseline gap-[0.2cm]">
+                          <span className="text-[0.6cm] font-bold text-black">{index + 1}.</span>
+                          <span
+                            className="whitespace-nowrap font-bold leading-none text-black"
+                            style={{ fontSize: `${isEnglish ? letterSizeCm : 0.9}cm`, paddingTop: `${isEnglish ? 0.2 : 0.2}cm` }}
+                          >
+                            {item.text}
+                          </span>
                         </div>
-                        <div className="w-[6cm] flex-none whitespace-nowrap text-[0.9cm] font-bold leading-none tracking-[0.1cm] text-black">
-                          {item.text}
-                        </div>
-                        <div
-                          className="grid min-w-0 flex-1 gap-[0.1cm]"
-                          style={{ gridTemplateColumns: `repeat(${perRow}, 1.3cm)` }}
-                        >
-                          {Array.from({ length: total }).map((_, i) => (
-                            <div
-                              key={i}
-                              className="border border-slate-600"
-                              style={{ width: '1.3cm', height: '1.3cm' }}
-                            />
-                          ))}
-                        </div>
+                        {Array.from({ length: times }).map((_, g) => {
+                          if (isEnglish) {
+                            const widthCm = Math.min(Math.max(charCount * 0.9, 4), 16);
+                            return (
+                              <div
+                                key={g}
+                                className="flex-none border-b-[0.05cm] border-black"
+                                style={{ width: `${widthCm}cm`, height: '0.9cm' }}
+                              />
+                            );
+                          }
+                          return (
+                            <div key={g} className="flex flex-none gap-[0.1cm]">
+                              {Array.from({ length: charCount }).map((_, c) => (
+                                <div
+                                  key={c}
+                                  className="border border-slate-600"
+                                  style={{ width: '1.3cm', height: '1.3cm' }}
+                                />
+                              ))}
+                            </div>
+                          );
+                        })}
                       </div>
                     </div>
                   );
