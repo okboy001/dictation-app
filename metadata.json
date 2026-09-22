@@ -1,5 +1,6 @@
 {
   "name": "默書小幫手",
-  "description": "小朋友默書工具：輸入詞語與課文，標點會保留，過長句子自動按詞語邊界拆到每段最多八個字，逐項按鍵朗讀。",
-  "majorCapabilities": []
+  "description": "中英文默書工具：輸入詞語與課文，逐項按鍵朗讀；默書模式支援語音指令；可匯出 A4 練習紙 PDF。",
+  "majorCapabilities": [],
+  "requestFramePermissions": ["microphone"]
 }

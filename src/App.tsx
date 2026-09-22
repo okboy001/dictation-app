@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef, type ReactNode } from 'react';
-import { Volume2, Trash2, Pencil, ChevronUp, ChevronDown, Plus, Languages, BookOpen, Check, X, LayoutGrid, Printer, type LucideIcon } from 'lucide-react';
+import { Volume2, Trash2, Pencil, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, Plus, Languages, BookOpen, Check, X, LayoutGrid, Printer, Play, RotateCcw, Eye, EyeOff, Mic, MicOff, type LucideIcon } from 'lucide-react';
 
 const MAX_CHUNK = 8;
 const MAX_EN_WORDS = 8;
@@ -501,6 +501,19 @@ export default function App() {
     return stored >= 1 && stored <= 5 ? stored : 2;
   });
 
+  const [dictMode, setDictMode] = useState(false);
+  const [dictIndex, setDictIndex] = useState(0);
+  const [dictPeek, setDictPeek] = useState(false);
+  const [micOn, setMicOn] = useState(false);
+  const [repeatTimes, setRepeatTimes] = useState<number>(() => {
+    const stored = parseInt(localStorage.getItem('dictation_repeat_v1') || '', 10);
+    return stored >= 1 && stored <= 3 ? stored : 1;
+  });
+  const [pauseSeconds, setPauseSeconds] = useState<number>(() => {
+    const stored = parseInt(localStorage.getItem('dictation_pause_v1') || '', 10);
+    return stored >= 0 && stored <= 8 ? stored : 3;
+  });
+
   const [cloudStatus, setCloudStatus] = useState<'idle' | 'loading' | 'saving' | 'synced' | 'error'>('idle');
   const [cloudError, setCloudError] = useState('');
 
@@ -524,6 +537,8 @@ export default function App() {
   useEffect(() => { localStorage.setItem('dictation_en_variant_v1', enVariant); }, [enVariant]);
   useEffect(() => { localStorage.setItem('dictation_speed_v1', String(speed)); }, [speed]);
   useEffect(() => { localStorage.setItem('dictation_practice_times_v1', String(times)); }, [times]);
+  useEffect(() => { localStorage.setItem('dictation_repeat_v1', String(repeatTimes)); }, [repeatTimes]);
+  useEffect(() => { localStorage.setItem('dictation_pause_v1', String(pauseSeconds)); }, [pauseSeconds]);
   useEffect(() => {
     localStorage.setItem('dictation_voice_yue_v1', JSON.stringify(voiceChoice.yue));
     localStorage.setItem('dictation_voice_pu_v1', JSON.stringify(voiceChoice.pu));
@@ -688,14 +703,11 @@ export default function App() {
     return () => document.removeEventListener('visibilitychange', onVisibility);
   }, [loadFromCloud]);
 
-  const speak = useCallback((id: string, text: string) => {
+  const buildUtterance = useCallback((text: string): SpeechSynthesisUtterance | null => {
     if (!('speechSynthesis' in window)) {
       setTtsSupported(false);
-      setNotice('此瀏覽器不支援語音朗讀');
-      return;
+      return null;
     }
-    window.speechSynthesis.cancel();
-
     const available = window.speechSynthesis.getVoices();
     const list = available.length > 0 ? available : voices;
 
@@ -708,9 +720,20 @@ export default function App() {
 
     const utterance = new SpeechSynthesisUtterance(speakableText(text, contentLang === 'en' ? enVariant : 'zh'));
     utterance.lang = voice?.lang || localeFor(speakLang);
-    if (voice) {
-      utterance.voice = voice;
-    } else {
+    if (voice) utterance.voice = voice;
+    utterance.rate = speed;
+    return utterance;
+  }, [speakLang, contentLang, enVariant, speed, voices, voiceChoice]);
+
+  const speak = useCallback((id: string, text: string) => {
+    const utterance = buildUtterance(text);
+    if (!utterance) {
+      setNotice('此瀏覽器不支援語音朗讀');
+      return;
+    }
+    window.speechSynthesis.cancel();
+
+    if (!utterance.voice) {
       setNotice(speakLang === 'pu'
         ? '未偵測到普通話語音，請喺「聲線」揀選或安裝普通話語音'
         : speakLang === 'en' || speakLang === 'enGB'
@@ -718,13 +741,12 @@ export default function App() {
           : '未偵測到粵語語音，請喺「聲線」揀選或安裝粵語語音');
     }
 
-    utterance.rate = speed;
     utterance.onend = () => setSpeakingId(prev => (prev === id ? null : prev));
     utterance.onerror = () => setSpeakingId(prev => (prev === id ? null : prev));
 
     setSpeakingId(id);
     window.speechSynthesis.speak(utterance);
-  }, [speakLang, contentLang, speed, voices, voiceChoice]);
+  }, [buildUtterance, speakLang]);
 
   const getListInfo = (key: ListKey) => {
     switch (key) {
@@ -741,6 +763,11 @@ export default function App() {
     if (key === 'enPractice') return parseEnglishWords(raw);
     return parseEnglishPassage(raw);
   };
+
+  const currentDictationKey = listKeyFor(contentLang, 'dictation');
+  const currentPracticeKey = listKeyFor(contentLang, 'practice');
+  const dictationInfo = getListInfo(currentDictationKey);
+  const practiceInfo = getListInfo(currentPracticeKey);
 
   const addItems = (key: ListKey, raw: string) => {
     const texts = parseFor(key, raw);
@@ -801,6 +828,132 @@ export default function App() {
 
   const toggleLang = () => setLang(prev => (prev === 'yue' ? 'pu' : 'yue'));
   const toggleContentLang = () => setContentLang(prev => (prev === 'zh' ? 'en' : 'zh'));
+
+  const dictSeqRef = useRef(0);
+  const dictIndexRef = useRef(0);
+  const micRef = useRef(false);
+  const recognitionRef = useRef<any>(null);
+
+  useEffect(() => { dictIndexRef.current = dictIndex; }, [dictIndex]);
+
+  const dictList = dictationInfo.items;
+
+  const playDictItem = useCallback((index: number) => {
+    if (!('speechSynthesis' in window)) return;
+    if (index < 0 || index >= dictList.length) return;
+    setDictIndex(index);
+    const token = ++dictSeqRef.current;
+    const sleep = (ms: number) => new Promise<void>(resolve => { setTimeout(resolve, ms); });
+    void (async () => {
+      for (let i = 0; i < repeatTimes; i++) {
+        if (dictSeqRef.current !== token) return;
+        const utterance = buildUtterance(dictList[index].text);
+        if (!utterance) return;
+        await new Promise<void>(resolve => {
+          if (dictSeqRef.current !== token) {
+            resolve();
+            return;
+          }
+          window.speechSynthesis.cancel();
+          utterance.onend = () => resolve();
+          utterance.onerror = () => resolve();
+          window.speechSynthesis.speak(utterance);
+        });
+        if (dictSeqRef.current !== token) return;
+        if (i < repeatTimes - 1 && pauseSeconds > 0) await sleep(pauseSeconds * 1000);
+      }
+    })();
+  }, [dictList, repeatTimes, pauseSeconds, buildUtterance]);
+
+  const stopRecognition = useCallback(() => {
+    micRef.current = false;
+    try { recognitionRef.current?.stop(); } catch { /* ignore */ }
+    recognitionRef.current = null;
+    setMicOn(false);
+  }, []);
+
+  const startDictation = useCallback(() => {
+    if (dictList.length === 0) return;
+    setDictMode(true);
+    setDictPeek(false);
+    playDictItem(0);
+  }, [dictList, playDictItem]);
+
+  const exitDictation = useCallback(() => {
+    dictSeqRef.current++;
+    if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+    stopRecognition();
+    setDictMode(false);
+    setDictPeek(false);
+  }, [stopRecognition]);
+
+  const playDictItemRef = useRef(playDictItem);
+  const exitDictationRef = useRef(exitDictation);
+  useEffect(() => { playDictItemRef.current = playDictItem; }, [playDictItem]);
+  useEffect(() => { exitDictationRef.current = exitDictation; }, [exitDictation]);
+
+  const recognitionLang = speakLang === 'pu' ? 'zh-CN' : speakLang === 'yue' ? 'zh-HK' : speakLang === 'enGB' ? 'en-GB' : 'en-US';
+
+  const handleVoiceCommand = useCallback((transcript: string) => {
+    const t = transcript.toLowerCase();
+    const isEn = speakLang === 'en' || speakLang === 'enGB';
+    const idx = dictIndexRef.current;
+    if (isEn) {
+      if (/\bnext\b/.test(t)) { playDictItemRef.current(idx + 1); return; }
+      if (/\bprevious\b|\bback\b/.test(t)) { playDictItemRef.current(idx - 1); return; }
+      if (/\bagain\b|\brepeat\b|\breplay\b/.test(t)) { playDictItemRef.current(idx); return; }
+      if (/\bshow\b/.test(t)) { setDictPeek(true); return; }
+      if (/\bhide\b/.test(t)) { setDictPeek(false); return; }
+      if (/\bexit\b|\bleave\b|\bstop\b/.test(t)) { exitDictationRef.current(); return; }
+      return;
+    }
+    if (/下一個|下一个|下个/.test(t)) { playDictItemRef.current(idx + 1); return; }
+    if (/上一個|上一个|上个/.test(t)) { playDictItemRef.current(idx - 1); return; }
+    if (/重讀|重读|再讀|再读|重來|重来/.test(t)) { playDictItemRef.current(idx); return; }
+    if (/顯示|显示/.test(t)) { setDictPeek(true); return; }
+    if (/隱藏|隐藏/.test(t)) { setDictPeek(false); return; }
+    if (/離開|离开|退出/.test(t)) { exitDictationRef.current(); return; }
+  }, [speakLang]);
+
+  const startRecognition = useCallback(() => {
+    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SR) {
+      setNotice('此瀏覽器唔支援語音指令（iPhone Safari 不支援）');
+      return;
+    }
+    if (recognitionRef.current) return;
+    const rec = new SR();
+    rec.lang = recognitionLang;
+    rec.continuous = true;
+    rec.interimResults = false;
+    rec.onresult = (event: any) => {
+      const results = event.results;
+      const last = results[results.length - 1];
+      if (!last || !last.isFinal) return;
+      const transcript = String(last[0]?.transcript ?? '');
+      if (transcript) handleVoiceCommand(transcript);
+    };
+    rec.onerror = () => { /* keep listening via onend */ };
+    rec.onend = () => {
+      if (micRef.current) {
+        try { rec.start(); } catch { /* ignore */ }
+      }
+    };
+    recognitionRef.current = rec;
+    micRef.current = true;
+    setMicOn(true);
+    try { rec.start(); } catch { /* ignore */ }
+  }, [recognitionLang, handleVoiceCommand]);
+
+  const toggleMic = () => {
+    if (micOn || recognitionRef.current) stopRecognition();
+    else startRecognition();
+  };
+
+  useEffect(() => () => {
+    micRef.current = false;
+    try { recognitionRef.current?.stop(); } catch { /* ignore */ }
+  }, []);
 
   const currentChoice = voiceChoice[speakLang];
 
@@ -982,10 +1135,6 @@ export default function App() {
     </section>
   );
 
-  const currentDictationKey = listKeyFor(contentLang, 'dictation');
-  const currentPracticeKey = listKeyFor(contentLang, 'practice');
-  const dictationInfo = getListInfo(currentDictationKey);
-  const practiceInfo = getListInfo(currentPracticeKey);
   const isEnglish = contentLang === 'en';
 
   return (
@@ -1107,6 +1256,14 @@ export default function App() {
                 : '輸入詞語或課文；用 Space 或換行分隔。標點會自動分行，長句會跟意思自動拆段（每行最多 8 字）。',
               isEnglish ? '尚未輸入任何英文默書內容' : '尚未輸入任何詞語或課文',
               isEnglish ? '新增（Enter）' : '新增（Enter，過長自動分段）',
+              <button
+                onClick={startDictation}
+                disabled={dictationInfo.items.length === 0}
+                title="開始默書模式"
+                className="flex items-center gap-1 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-bold text-emerald-600 transition-all hover:bg-emerald-100 active:scale-95 disabled:opacity-40"
+              >
+                <Play className="h-3.5 w-3.5" /> 開始默書
+              </button>,
             )
           : renderCard(
               currentPracticeKey,
@@ -1188,21 +1345,21 @@ export default function App() {
                 <span>姓名：＿＿＿＿＿＿</span>
                 <span>日期：＿＿＿＿＿＿</span>
               </div>
-              <div className="flex flex-wrap gap-x-8 gap-y-10">
+              <div className="grid grid-cols-2 gap-x-8 gap-y-10">
                 {practiceInfo.items.map(item => {
                   if (isEnglish) {
                     const letters = Math.max(Array.from(item.text).length, 1);
                     const lineWidthCm = Math.min(Math.max(letters * 0.9, 4), 16);
                     return (
                       <div key={item.id} className="flex items-start gap-3 break-inside-avoid">
-                        <div className="whitespace-nowrap pt-[0.15cm] text-[0.9cm] font-bold leading-none tracking-[0.05cm] text-slate-400">
+                        <div className="whitespace-nowrap pt-[0.15cm] text-[0.9cm] font-bold leading-none tracking-[0.05cm] text-black">
                           {item.text}
                         </div>
                         <div className="flex flex-col gap-[0.7cm]">
                           {Array.from({ length: times }).map((_, i) => (
                             <div
                               key={i}
-                              className="border-b-[0.05cm] border-slate-500"
+                              className="border-b-[0.05cm] border-black"
                               style={{ width: `${lineWidthCm}cm`, height: '0.9cm' }}
                             />
                           ))}
@@ -1217,7 +1374,7 @@ export default function App() {
                   const total = charCount * times;
                   return (
                     <div key={item.id} className="flex items-center gap-3 break-inside-avoid">
-                      <div className="whitespace-nowrap text-[0.9cm] font-bold leading-none tracking-[0.1cm] text-slate-400">
+                      <div className="whitespace-nowrap text-[0.9cm] font-bold leading-none tracking-[0.1cm] text-black">
                         {item.text}
                       </div>
                       <div
@@ -1227,7 +1384,7 @@ export default function App() {
                         {Array.from({ length: total }).map((_, i) => (
                           <div
                             key={i}
-                            className="border border-slate-500"
+                            className="border border-slate-600"
                             style={{ width: '1.3cm', height: '1.3cm' }}
                           />
                         ))}
@@ -1237,6 +1394,103 @@ export default function App() {
                 })}
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {dictMode && (
+        <div className="fixed inset-0 z-50 flex flex-col bg-slate-900/95 print:hidden">
+          <div className="flex flex-none flex-wrap items-center justify-between gap-2 px-4 py-3">
+            <div className="flex items-center gap-3 text-sm font-bold text-white">
+              <span>第 {Math.min(dictIndex + 1, dictList.length)} 個／共 {dictList.length} 個</span>
+              <span className="text-slate-400">剩返 {Math.max(dictList.length - dictIndex, 0)} 個</span>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <label className="flex items-center gap-1 text-xs font-bold text-slate-300">
+                重複
+                <select
+                  value={repeatTimes}
+                  onChange={event => setRepeatTimes(parseInt(event.target.value, 10))}
+                  className="rounded-lg bg-slate-800 px-2 py-1 text-xs font-bold text-white focus:outline-none"
+                >
+                  {[1, 2, 3].map(n => <option key={n} value={n}>{n} 次</option>)}
+                </select>
+              </label>
+              <label className="flex items-center gap-1 text-xs font-bold text-slate-300">
+                停頓
+                <select
+                  value={pauseSeconds}
+                  onChange={event => setPauseSeconds(parseInt(event.target.value, 10))}
+                  className="rounded-lg bg-slate-800 px-2 py-1 text-xs font-bold text-white focus:outline-none"
+                >
+                  {[0, 1, 2, 3, 4, 5, 6, 8].map(n => <option key={n} value={n}>{n} 秒</option>)}
+                </select>
+              </label>
+              <button
+                onClick={toggleMic}
+                className={`flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-bold transition-all active:scale-95 ${
+                  micOn ? 'border-red-300 bg-red-500/20 text-red-300' : 'border-slate-600 bg-slate-800 text-slate-300'
+                }`}
+                title="語音指令收音"
+              >
+                {micOn ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
+                {micOn ? '收音中' : '收音'}
+              </button>
+              <button
+                onClick={() => setDictPeek(prev => !prev)}
+                className="flex items-center gap-1.5 rounded-lg border border-slate-600 bg-slate-800 px-3 py-1.5 text-xs font-bold text-slate-300 transition-all active:scale-95"
+                title="顯示／隱藏當前詞語"
+              >
+                {dictPeek ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                {dictPeek ? '隱藏' : '顯示'}
+              </button>
+            </div>
+          </div>
+
+          <div className="flex min-h-0 flex-1 items-center justify-center px-6">
+            {dictPeek && dictList[dictIndex] ? (
+              <div className="break-all text-center text-5xl font-black tracking-widest text-white">
+                {dictList[dictIndex].text}
+              </div>
+            ) : (
+              <div className="text-center text-lg font-bold text-slate-600">
+                盲默中：詞語已隱藏
+                {micOn && (
+                  <div className="mt-3 text-xs font-bold text-slate-500">
+                    語音指令：下一個／上一個／重讀／顯示／離開
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          <div className="flex flex-none flex-wrap items-center justify-center gap-3 px-4 pb-10">
+            <button
+              onClick={() => playDictItem(dictIndex - 1)}
+              disabled={dictIndex <= 0}
+              className="flex items-center gap-2 rounded-2xl border border-slate-600 bg-slate-800 px-5 py-3 text-sm font-black text-white transition-all active:scale-95 disabled:opacity-30"
+            >
+              <ChevronLeft className="h-5 w-5" /> 上一個
+            </button>
+            <button
+              onClick={() => playDictItem(dictIndex)}
+              className="flex items-center gap-2 rounded-2xl bg-blue-500 px-6 py-3 text-sm font-black text-white transition-all active:scale-95"
+            >
+              <RotateCcw className="h-5 w-5" /> 重讀
+            </button>
+            <button
+              onClick={() => playDictItem(dictIndex + 1)}
+              disabled={dictIndex >= dictList.length - 1}
+              className="flex items-center gap-2 rounded-2xl border border-slate-600 bg-slate-800 px-5 py-3 text-sm font-black text-white transition-all active:scale-95 disabled:opacity-30"
+            >
+              下一個 <ChevronRight className="h-5 w-5" />
+            </button>
+            <button
+              onClick={exitDictation}
+              className="flex items-center gap-2 rounded-2xl border border-rose-300 bg-rose-500/20 px-5 py-3 text-sm font-black text-rose-300 transition-all active:scale-95"
+            >
+              <X className="h-5 w-5" /> 離開
+            </button>
           </div>
         </div>
       )}
