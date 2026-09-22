@@ -503,6 +503,7 @@ export default function App() {
 
   const [dictMode, setDictMode] = useState(false);
   const [dictIndex, setDictIndex] = useState(0);
+  const [dictSource, setDictSource] = useState<TabKey>('dictation');
   const [dictPeek, setDictPeek] = useState(false);
   const [micOn, setMicOn] = useState(false);
   const [repeatTimes, setRepeatTimes] = useState<number>(() => {
@@ -836,18 +837,22 @@ export default function App() {
 
   useEffect(() => { dictIndexRef.current = dictIndex; }, [dictIndex]);
 
-  const dictList = dictationInfo.items;
+  const dictList = dictSource === 'practice' ? practiceInfo.items : dictationInfo.items;
+  const dictListRef = useRef(dictList);
+
+  useEffect(() => { dictListRef.current = dictList; }, [dictList]);
 
   const playDictItem = useCallback((index: number) => {
     if (!('speechSynthesis' in window)) return;
-    if (index < 0 || index >= dictList.length) return;
+    const list = dictListRef.current;
+    if (index < 0 || index >= list.length) return;
     setDictIndex(index);
     const token = ++dictSeqRef.current;
     const sleep = (ms: number) => new Promise<void>(resolve => { setTimeout(resolve, ms); });
     void (async () => {
       for (let i = 0; i < repeatTimes; i++) {
         if (dictSeqRef.current !== token) return;
-        const utterance = buildUtterance(dictList[index].text);
+        const utterance = buildUtterance(list[index].text);
         if (!utterance) return;
         await new Promise<void>(resolve => {
           if (dictSeqRef.current !== token) {
@@ -863,7 +868,7 @@ export default function App() {
         if (i < repeatTimes - 1 && pauseSeconds > 0) await sleep(pauseSeconds * 1000);
       }
     })();
-  }, [dictList, repeatTimes, pauseSeconds, buildUtterance]);
+  }, [repeatTimes, pauseSeconds, buildUtterance]);
 
   const stopRecognition = useCallback(() => {
     micRef.current = false;
@@ -872,12 +877,15 @@ export default function App() {
     setMicOn(false);
   }, []);
 
-  const startDictation = useCallback(() => {
-    if (dictList.length === 0) return;
+  const startDictation = useCallback((source: TabKey) => {
+    const list = source === 'practice' ? practiceInfo.items : dictationInfo.items;
+    if (list.length === 0) return;
+    dictListRef.current = list;
+    setDictSource(source);
     setDictMode(true);
     setDictPeek(false);
     playDictItem(0);
-  }, [dictList, playDictItem]);
+  }, [dictationInfo.items, practiceInfo.items, playDictItem]);
 
   const exitDictation = useCallback(() => {
     dictSeqRef.current++;
@@ -1257,7 +1265,7 @@ export default function App() {
               isEnglish ? '尚未輸入任何英文默書內容' : '尚未輸入任何詞語或課文',
               isEnglish ? '新增（Enter）' : '新增（Enter，過長自動分段）',
               <button
-                onClick={startDictation}
+                onClick={() => startDictation('dictation')}
                 disabled={dictationInfo.items.length === 0}
                 title="開始默書模式"
                 className="flex items-center gap-1 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-bold text-emerald-600 transition-all hover:bg-emerald-100 active:scale-95 disabled:opacity-40"
@@ -1277,14 +1285,24 @@ export default function App() {
                 : '每行一個默書唔識嘅字（Space／換行分隔），例如：認真 口 四個字',
               isEnglish ? '尚未輸入任何英文練習字' : '尚未輸入任何練習字',
               '新增（Enter）',
-              <button
-                onClick={() => setShowExport(true)}
-                disabled={practiceInfo.items.length === 0}
-                title="匯出練習紙 PDF（列印另存）"
-                className="flex items-center gap-1 rounded-xl border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-bold text-blue-600 transition-all hover:bg-blue-100 active:scale-95 disabled:opacity-40"
-              >
-                <Printer className="h-3.5 w-3.5" /> 匯出 PDF
-              </button>,
+              <>
+                <button
+                  onClick={() => startDictation('practice')}
+                  disabled={practiceInfo.items.length === 0}
+                  title="用練習字清單默書"
+                  className="flex items-center gap-1 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-bold text-emerald-600 transition-all hover:bg-emerald-100 active:scale-95 disabled:opacity-40"
+                >
+                  <Play className="h-3.5 w-3.5" /> 開始默書
+                </button>
+                <button
+                  onClick={() => setShowExport(true)}
+                  disabled={practiceInfo.items.length === 0}
+                  title="匯出練習紙 PDF（列印另存）"
+                  className="flex items-center gap-1 rounded-xl border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-bold text-blue-600 transition-all hover:bg-blue-100 active:scale-95 disabled:opacity-40"
+                >
+                  <Printer className="h-3.5 w-3.5" /> 匯出 PDF
+                </button>
+              </>,
             )}
       </main>
 
@@ -1345,24 +1363,32 @@ export default function App() {
                 <span>姓名：＿＿＿＿＿＿</span>
                 <span>日期：＿＿＿＿＿＿</span>
               </div>
-              <div className="grid grid-cols-2 gap-x-8 gap-y-10">
-                {practiceInfo.items.map(item => {
+              <div className="flex flex-col gap-y-[1cm]">
+                {practiceInfo.items.map((item, index) => {
                   if (isEnglish) {
                     const letters = Math.max(Array.from(item.text).length, 1);
-                    const lineWidthCm = Math.min(Math.max(letters * 0.9, 4), 16);
+                    const letterSizeCm = Math.min(0.55, 5.5 / letters);
                     return (
-                      <div key={item.id} className="flex items-start gap-3 break-inside-avoid">
-                        <div className="whitespace-nowrap pt-[0.15cm] text-[0.9cm] font-bold leading-none tracking-[0.05cm] text-black">
-                          {item.text}
-                        </div>
-                        <div className="flex flex-col gap-[0.7cm]">
-                          {Array.from({ length: times }).map((_, i) => (
-                            <div
-                              key={i}
-                              className="border-b-[0.05cm] border-black"
-                              style={{ width: `${lineWidthCm}cm`, height: '0.9cm' }}
-                            />
-                          ))}
+                      <div key={item.id} className="break-inside-avoid">
+                        <div className="flex items-start">
+                          <div className="w-[1.2cm] flex-none pt-[0.15cm] text-[0.6cm] font-bold text-black">
+                            {index + 1}.
+                          </div>
+                          <div
+                            className="w-[6cm] flex-none overflow-hidden whitespace-nowrap font-bold leading-none text-black"
+                            style={{ fontSize: `${letterSizeCm}cm` }}
+                          >
+                            {item.text}
+                          </div>
+                          <div className="flex min-w-0 flex-1 flex-col gap-[0.7cm]">
+                            {Array.from({ length: times }).map((_, i) => (
+                              <div
+                                key={i}
+                                className="border-b-[0.05cm] border-black"
+                                style={{ height: '0.9cm' }}
+                              />
+                            ))}
+                          </div>
                         </div>
                       </div>
                     );
@@ -1373,21 +1399,26 @@ export default function App() {
                   const perRow = charCount === 1 ? times : Math.min(charCount, 13);
                   const total = charCount * times;
                   return (
-                    <div key={item.id} className="flex items-center gap-3 break-inside-avoid">
-                      <div className="whitespace-nowrap text-[0.9cm] font-bold leading-none tracking-[0.1cm] text-black">
-                        {item.text}
-                      </div>
-                      <div
-                        className="grid gap-[0.1cm]"
-                        style={{ gridTemplateColumns: `repeat(${perRow}, 1.3cm)` }}
-                      >
-                        {Array.from({ length: total }).map((_, i) => (
-                          <div
-                            key={i}
-                            className="border border-slate-600"
-                            style={{ width: '1.3cm', height: '1.3cm' }}
-                          />
-                        ))}
+                    <div key={item.id} className="break-inside-avoid">
+                      <div className="flex items-start">
+                        <div className="w-[1.2cm] flex-none pt-[0.35cm] text-[0.6cm] font-bold text-black">
+                          {index + 1}.
+                        </div>
+                        <div className="w-[6cm] flex-none whitespace-nowrap text-[0.9cm] font-bold leading-none tracking-[0.1cm] text-black">
+                          {item.text}
+                        </div>
+                        <div
+                          className="grid min-w-0 flex-1 gap-[0.1cm]"
+                          style={{ gridTemplateColumns: `repeat(${perRow}, 1.3cm)` }}
+                        >
+                          {Array.from({ length: total }).map((_, i) => (
+                            <div
+                              key={i}
+                              className="border border-slate-600"
+                              style={{ width: '1.3cm', height: '1.3cm' }}
+                            />
+                          ))}
+                        </div>
                       </div>
                     </div>
                   );
@@ -1399,29 +1430,29 @@ export default function App() {
       )}
 
       {dictMode && (
-        <div className="fixed inset-0 z-50 flex flex-col bg-slate-900/95 print:hidden">
-          <div className="flex flex-none flex-wrap items-center justify-between gap-2 px-4 py-3">
-            <div className="flex items-center gap-3 text-sm font-bold text-white">
+        <div className="fixed inset-0 z-50 flex flex-col bg-slate-100 print:hidden">
+          <div className="flex flex-none flex-wrap items-center justify-between gap-2 border-b border-slate-200 bg-white px-4 py-3 shadow-sm">
+            <div className="flex items-center gap-3 text-base font-black text-slate-700">
               <span>第 {Math.min(dictIndex + 1, dictList.length)} 個／共 {dictList.length} 個</span>
-              <span className="text-slate-400">剩返 {Math.max(dictList.length - dictIndex, 0)} 個</span>
+              <span className="text-sm font-bold text-slate-400">剩返 {Math.max(dictList.length - dictIndex, 0)} 個</span>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              <label className="flex items-center gap-1 text-xs font-bold text-slate-300">
+              <label className="flex items-center gap-1 text-xs font-bold text-slate-600">
                 重複
                 <select
                   value={repeatTimes}
                   onChange={event => setRepeatTimes(parseInt(event.target.value, 10))}
-                  className="rounded-lg bg-slate-800 px-2 py-1 text-xs font-bold text-white focus:outline-none"
+                  className="cursor-pointer rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-bold text-slate-700 focus:outline-none"
                 >
                   {[1, 2, 3].map(n => <option key={n} value={n}>{n} 次</option>)}
                 </select>
               </label>
-              <label className="flex items-center gap-1 text-xs font-bold text-slate-300">
+              <label className="flex items-center gap-1 text-xs font-bold text-slate-600">
                 停頓
                 <select
                   value={pauseSeconds}
                   onChange={event => setPauseSeconds(parseInt(event.target.value, 10))}
-                  className="rounded-lg bg-slate-800 px-2 py-1 text-xs font-bold text-white focus:outline-none"
+                  className="cursor-pointer rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-bold text-slate-700 focus:outline-none"
                 >
                   {[0, 1, 2, 3, 4, 5, 6, 8].map(n => <option key={n} value={n}>{n} 秒</option>)}
                 </select>
@@ -1429,7 +1460,7 @@ export default function App() {
               <button
                 onClick={toggleMic}
                 className={`flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-bold transition-all active:scale-95 ${
-                  micOn ? 'border-red-300 bg-red-500/20 text-red-300' : 'border-slate-600 bg-slate-800 text-slate-300'
+                  micOn ? 'border-red-300 bg-red-50 text-red-600' : 'border-slate-200 bg-white text-slate-600'
                 }`}
                 title="語音指令收音"
               >
@@ -1438,7 +1469,7 @@ export default function App() {
               </button>
               <button
                 onClick={() => setDictPeek(prev => !prev)}
-                className="flex items-center gap-1.5 rounded-lg border border-slate-600 bg-slate-800 px-3 py-1.5 text-xs font-bold text-slate-300 transition-all active:scale-95"
+                className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-600 transition-all active:scale-95"
                 title="顯示／隱藏當前詞語"
               >
                 {dictPeek ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
@@ -1449,11 +1480,11 @@ export default function App() {
 
           <div className="flex min-h-0 flex-1 items-center justify-center px-6">
             {dictPeek && dictList[dictIndex] ? (
-              <div className="break-all text-center text-5xl font-black tracking-widest text-white">
+              <div className="break-all text-center text-6xl font-black tracking-widest text-slate-900">
                 {dictList[dictIndex].text}
               </div>
             ) : (
-              <div className="text-center text-lg font-bold text-slate-600">
+              <div className="text-center text-lg font-bold text-slate-400">
                 盲默中：詞語已隱藏
                 {micOn && (
                   <div className="mt-3 text-xs font-bold text-slate-500">
@@ -1464,32 +1495,32 @@ export default function App() {
             )}
           </div>
 
-          <div className="flex flex-none flex-wrap items-center justify-center gap-3 px-4 pb-10">
+          <div className="flex flex-none flex-wrap items-center justify-center gap-4 px-4 pb-10">
             <button
               onClick={() => playDictItem(dictIndex - 1)}
               disabled={dictIndex <= 0}
-              className="flex items-center gap-2 rounded-2xl border border-slate-600 bg-slate-800 px-5 py-3 text-sm font-black text-white transition-all active:scale-95 disabled:opacity-30"
+              className="flex items-center gap-2 rounded-2xl border-2 border-slate-300 bg-white px-8 py-4 text-lg font-black text-slate-700 shadow-sm transition-all active:scale-95 disabled:opacity-30"
             >
-              <ChevronLeft className="h-5 w-5" /> 上一個
+              <ChevronLeft className="h-6 w-6" /> 上一個
             </button>
             <button
               onClick={() => playDictItem(dictIndex)}
-              className="flex items-center gap-2 rounded-2xl bg-blue-500 px-6 py-3 text-sm font-black text-white transition-all active:scale-95"
+              className="flex items-center gap-2 rounded-2xl bg-blue-500 px-10 py-4 text-lg font-black text-white shadow-md transition-all active:scale-95"
             >
-              <RotateCcw className="h-5 w-5" /> 重讀
+              <RotateCcw className="h-6 w-6" /> 重讀
             </button>
             <button
               onClick={() => playDictItem(dictIndex + 1)}
               disabled={dictIndex >= dictList.length - 1}
-              className="flex items-center gap-2 rounded-2xl border border-slate-600 bg-slate-800 px-5 py-3 text-sm font-black text-white transition-all active:scale-95 disabled:opacity-30"
+              className="flex items-center gap-2 rounded-2xl border-2 border-slate-300 bg-white px-8 py-4 text-lg font-black text-slate-700 shadow-sm transition-all active:scale-95 disabled:opacity-30"
             >
-              下一個 <ChevronRight className="h-5 w-5" />
+              下一個 <ChevronRight className="h-6 w-6" />
             </button>
             <button
               onClick={exitDictation}
-              className="flex items-center gap-2 rounded-2xl border border-rose-300 bg-rose-500/20 px-5 py-3 text-sm font-black text-rose-300 transition-all active:scale-95"
+              className="flex items-center gap-2 rounded-2xl border-2 border-rose-200 bg-rose-50 px-8 py-4 text-lg font-black text-rose-600 shadow-sm transition-all active:scale-95"
             >
-              <X className="h-5 w-5" /> 離開
+              <X className="h-6 w-6" /> 離開
             </button>
           </div>
         </div>
