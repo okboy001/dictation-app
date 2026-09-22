@@ -1382,7 +1382,7 @@ export default function App() {
                         </div>
                         {Array.from({ length: times }).map((_, g) => {
                           if (isEnglish) {
-                            const widthCm = Math.min(Math.max(charCount * 0.9, 4), 16);
+                            const widthCm = Math.min(Math.max(charCount * 0.45, 2), 8);
                             return (
                               <div
                                 key={g}
